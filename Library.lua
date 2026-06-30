@@ -1,5 +1,9 @@
 local Globals = getgenv()
 
+if shared.TDSTable then
+    return shared.TDSTable
+end
+
 local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local GuiService = game:GetService("GuiService")
@@ -109,6 +113,8 @@ local mouse = LocalPlayer:GetMouse()
 local RemoteFunc = ReplicatedStorage:WaitForChild("RemoteFunction")
 local RemoteEvent = ReplicatedStorage:WaitForChild("RemoteEvent")
 local FileName = "ADS_Config.json"
+local Logger
+local StartBackToLobby
 local platform = UserInputService:GetPlatform()
 local IsMobile = (platform == Enum.Platform.IOS or platform == Enum.Platform.Android)
 
@@ -295,6 +301,8 @@ local ItemNames = {
     ["139414922355803"] = "Present Clusters(s)"
 }
 
+local executed_actions = {}
+
 -- // tower management core
 TDS = {
     PlacedTowers = {},
@@ -316,6 +324,34 @@ local UpgradeHistory = {}
 -- // shared for addons
 shared.TDSTable = TDS
 shared["TDS_Table"] = TDS
+
+function TDS:ResetAllStates()
+    table.clear(self.PlacedTowers)
+    table.clear(UpgradeHistory)
+    table.clear(executed_actions)
+    if Logger and Logger.Clear then
+        pcall(function()
+            Logger:Clear()
+            Logger:Log("Restarting strategy...")
+        end)
+    end
+end
+
+function TDS:RunStrategy()
+    if Globals.activeStrategyThread then
+        pcall(task.cancel, Globals.activeStrategyThread)
+        Globals.activeStrategyThread = nil
+    end
+
+    Globals.activeStrategyThread = task.spawn(function()
+        Globals.tdsReplaying = true
+        pcall(function()
+            loadstring(readfile("ADS_LastStrat.lua"))()
+        end)
+        Globals.tdsReplaying = false
+        Globals.activeStrategyThread = nil
+    end)
+end
 
 -- // load & save
 local function SaveSettings()
@@ -1087,13 +1123,13 @@ local function StartAutoReady()
     AutoReadyRunning = true
 
     task.spawn(function()
-        local VR = ReplicatedStorage:WaitForChild("StateReplicators"):WaitForChild("VoteReplicator")
+        local voteReplicator = ReplicatedStorage:WaitForChild("StateReplicators"):WaitForChild("VoteReplicator")
         
-        repeat task.wait(0.1) until VR:GetAttribute("Enabled") == true and VR:GetAttribute("Title") == "Ready?"
+        repeat task.wait(0.1) until voteReplicator:GetAttribute("Enabled") == true and voteReplicator:GetAttribute("Title") == "Ready?"
         
         RunVoteSkip()
         
-        repeat task.wait(0.1) until VR:GetAttribute("Enabled") == false
+        repeat task.wait(0.1) until voteReplicator:GetAttribute("Enabled") == false
         
         AutoReadyRunning = false
     end)
@@ -1214,11 +1250,24 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
     Automation:Section({Title = "Match Progression"})
     
     Automation:Toggle({
-        Title = "Auto Rejoin",
-        Desc = "Rejoins the gamemode after you've won and does the strategy again",
+        Title = "Auto Rejoin/Restart",
+        Desc = "Rejoins the game after a win, or restarts inside the match on a lose",
         Value = Globals.AutoRejoin,
         Callback = function(v)
             SetSetting("AutoRejoin", v)
+            if isfile("ADS_LastStrat.lua") then
+                pcall(delfile, "ADS_LastStrat.lua")
+            end
+            if v and GameState == "GAME" then
+                if #executed_actions > 0 then
+                    local content = "local TDS = shared.TDSTable or loadstring(game:HttpGet(\"https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua\"))()\n\n"
+                    content = content .. table.concat(executed_actions, "\n")
+                    writefile("ADS_LastStrat.lua", content)
+                end
+                if not BackToLobbyRunning then
+                    StartBackToLobby()
+                end
+            end
         end
     })
 
@@ -2311,7 +2360,7 @@ end
 
 Window:Line()
 
-local Logger = Window:Tab({Title = "Logger", Icon = "terminal"}) do
+Logger = Window:Tab({Title = "Logger", Icon = "terminal"}) do
     Logger = Logger:CreateLogger({
         Title = "STRATEGY LOGGER:",
         Size = UDim2.new(0, 330, 0, 300)
@@ -2643,8 +2692,11 @@ local function RejoinMatch()
     repeat
         local StateFolder = ReplicatedStorage:FindFirstChild("State")
         local CurrentMode = StateFolder and StateFolder.Difficulty.Value
+        if not CurrentMode or CurrentMode == "" then
+            CurrentMode = TDS.SavedDifficulty
+        end
 
-        if CurrentMode then
+        if CurrentMode and CurrentMode ~= "" then
             local ok, result = pcall(function()
                 local payload
                 local EventMode = StateFolder:FindFirstChild("Mode") and StateFolder.Mode.Value
@@ -2710,7 +2762,7 @@ local function RejoinMatch()
     return res
 end
 
-local function HandlePostMatch()
+local function HandlePostMatch(skipRejoin)
     local UiRoot
     repeat
         task.wait(1)
@@ -2722,11 +2774,19 @@ local function HandlePostMatch()
         UiRoot = RewardsScreen and RewardsScreen:FindFirstChild("RewardsSection")
     until UiRoot
 
-    if not UiRoot then return RejoinMatch() end
+    if not UiRoot then 
+        if not skipRejoin then
+            return RejoinMatch() 
+        else
+            return
+        end
+    end
     if not Globals.AutoRejoin then return end
 
     if not Globals.SendWebhook then
-        RejoinMatch()
+        if not skipRejoin then
+            RejoinMatch()
+        end
         return
     end
 
@@ -2794,44 +2854,64 @@ local function HandlePostMatch()
 
     task.wait(1.5)
 
-    RejoinMatch()
+    if not skipRejoin then
+        RejoinMatch()
+    end
 
     task.wait(9e9)
 end
 
 local function MatchReadyUp()
-    local PlayerGui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+    local stateReplicators = ReplicatedStorage:WaitForChild("StateReplicators")
+    local voteReplicator = stateReplicators:WaitForChild("VoteReplicator")
+    local gameStateReplicator = stateReplicators:WaitForChild("GameStateReplicator")
 
-    local UiOverrides = PlayerGui:WaitForChild("ReactOverridesVote", 30)
-    local MainFrame = UiOverrides and UiOverrides:WaitForChild("Frame", 30)
-
-    if not MainFrame then
+    if gameStateReplicator:GetAttribute("GameStarted") == true then
+        return
+    end
+    
+    local voteTitle = voteReplicator:GetAttribute("Title")
+    if voteTitle == "Ready?" and voteReplicator:GetAttribute("Enabled") == true then
+        RunVoteSkip()
         return
     end
 
-    local VoteReady = nil
+    local yieldSignal = Instance.new("BindableEvent")
+    local voteConnection
+    local gameStartedConnection
 
-    while not VoteReady do
-        local VoteNode = MainFrame:FindFirstChild("votes")
-
-        if VoteNode then
-            local container = VoteNode:FindFirstChild("container")
-            if container then
-                local ready = container:FindFirstChild("ready")
-                if ready then
-                    VoteReady = ready
-                end
+    voteConnection = voteReplicator.AttributeChanged:Connect(function(attributeName)
+        if attributeName == "Enabled" and voteReplicator:GetAttribute("Enabled") == true then
+            if voteReplicator:GetAttribute("Title") == "Ready?" then
+                RunVoteSkip()
+                yieldSignal:Fire()
+            end
+        elseif attributeName == "Title" and voteReplicator:GetAttribute("Title") ~= "Ready?" then
+            yieldSignal:Fire()
+        elseif attributeName == "VoteCount" or attributeName == "MaxVotes" then
+            local currentVotes = voteReplicator:GetAttribute("VoteCount")
+            local maxVotesRequired = voteReplicator:GetAttribute("MaxVotes")
+            if currentVotes and maxVotesRequired and maxVotesRequired > 0 and currentVotes >= maxVotesRequired then
+                yieldSignal:Fire()
             end
         end
+    end)
 
-        if not VoteReady then
-            task.wait(0.5) 
+    gameStartedConnection = gameStateReplicator:GetAttributeChangedSignal("GameStarted"):Connect(function()
+        if gameStateReplicator:GetAttribute("GameStarted") == true then
+            yieldSignal:Fire()
         end
+    end)
+
+    yieldSignal.Event:Wait()
+
+    if voteConnection then
+        voteConnection:Disconnect()
     end
-
-    repeat task.wait(0.1) until VoteReady.Visible == true
-
-    RunVoteSkip()
+    if gameStartedConnection then
+        gameStartedConnection:Disconnect()
+    end
+    yieldSignal:Destroy()
 end
 
 local function CastMapVote(MapId, PosVec)
@@ -3245,6 +3325,7 @@ end
 -- // public api
 -- lobby
 function TDS:Mode(difficulty, code)
+    self.SavedDifficulty = difficulty
     local targetCode = ""
 
     if IsMobile then
@@ -3490,7 +3571,10 @@ function TDS:GameInfo(name, list)
 
     CastModifierVote(modifiers)
 
-    if MarketplaceService:UserOwnsGamePassAsync(LocalPlayer.UserId, 10518590) or game:GetService("ReplicatedStorage").StateReplicators.GameStateReplicator:GetAttribute("IsPrivateServer") == true then
+    local stateReplicators = game:GetService("ReplicatedStorage"):WaitForChild("StateReplicators", 5)
+    local gameStateReplicator = stateReplicators and stateReplicators:FindFirstChild("GameStateReplicator")
+
+    if MarketplaceService:UserOwnsGamePassAsync(LocalPlayer.UserId, 10518590) or (gameStateReplicator and gameStateReplicator:GetAttribute("IsPrivateServer") == true) then
         SelectMapOverride(name, "vip")
         Logger:Log("Selected map: " .. name)
         repeat task.wait(1) until PlayerGui:FindFirstChild("ReactUniversalHotbar")
@@ -3501,7 +3585,7 @@ function TDS:GameInfo(name, list)
         return true
     else
         Logger:Log("Map '" .. name .. "' not available, rejoining...")
-        SmartTeleportToLobby()
+        RejoinMatch()
         repeat task.wait(9999) until false
     end
 end
@@ -3721,6 +3805,75 @@ function TDS:MedicSelect(idx, val)
         return true
     end
     return false
+end
+
+local function strategyRecordingSetup()
+    local originalMethods = {}
+    local recordableMethods = {
+        "Mode", "Place", "Upgrade", "SetTarget", "Sell", "SellAll", "Ability", "SetOption", "MedicSelect", "Ready", "VoteSkip", "WaitForWave", "UnlockTimeScale", "TimeScale"
+    }
+
+    for _, methodName in ipairs(recordableMethods) do
+        originalMethods[methodName] = TDS[methodName]
+        TDS[methodName] = function(self, ...)
+            if not Globals.tdsReplaying and GameState == "GAME" then
+                local argumentsList = {...}
+                local stringifiedArguments = {}
+                for _, argumentValue in ipairs(argumentsList) do
+                    local argumentType = type(argumentValue)
+                    if argumentType == "string" then
+                        table.insert(stringifiedArguments, string.format("%q", argumentValue))
+                    elseif argumentType == "number" or argumentType == "boolean" then
+                        table.insert(stringifiedArguments, tostring(argumentValue))
+                    elseif argumentType == "table" then
+                        local parts = {}
+                        for key, val in pairs(argumentValue) do
+                            local keyType = type(key)
+                            local formattedKey
+                            if keyType == "string" then
+                                formattedKey = string.format("[%q]", key)
+                            elseif keyType == "number" then
+                                formattedKey = string.format("[%d]", key)
+                            else
+                                formattedKey = string.format("[%s]", tostring(key))
+                            end
+                            local formattedValue = type(val) == "string" and string.format("%q", val) or tostring(val)
+                            table.insert(parts, formattedKey .. " = " .. formattedValue)
+                        end
+                        table.insert(stringifiedArguments, "{" .. table.concat(parts, ", ") .. "}")
+                    else
+                        table.insert(stringifiedArguments, "nil")
+                    end
+                end
+                
+                if methodName == "Mode" then
+                    executed_actions = {}
+                else
+                    local actionString = string.format("TDS:%s(%s)", methodName, table.concat(stringifiedArguments, ", "))
+                    table.insert(executed_actions, actionString)
+                    
+                    local strategyFileContent = "local TDS = shared.TDSTable or loadstring(game:HttpGet(\"https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua\"))()\n\n"
+                    strategyFileContent = strategyFileContent .. table.concat(executed_actions, "\n")
+                    writefile("ADS_LastStrat.lua", strategyFileContent)
+                end
+            end
+            
+            return originalMethods[methodName](self, ...)
+        end
+    end
+end
+
+strategyRecordingSetup()
+
+if GameState == "LOBBY" and Globals.AutoRejoin and isfile("ADS_LastStrat.lua") then
+    pcall(delfile, "ADS_LastStrat.lua")
+end
+
+if GameState == "GAME" and Globals.AutoRejoin and isfile("ADS_LastStrat.lua") then
+    task.spawn(function()
+        task.wait(2)
+        TDS:RunStrategy()
+    end)
 end
 
 -- // misc utility
@@ -3952,16 +4105,75 @@ local function StartClaimRewards()
     AutoClaimRewards = false
 end
 
-local function StartBackToLobby()
+function StartBackToLobby()
+    if GameState ~= "GAME" then return end
     if BackToLobbyRunning then return end
     BackToLobbyRunning = true
 
     task.spawn(function()
-        while true do
-            pcall(function()
-                HandlePostMatch()
-            end)
-            task.wait(5)
+        local stateReplicators = ReplicatedStorage:WaitForChild("StateReplicators", 30)
+        local gameStateReplicator = stateReplicators and stateReplicators:WaitForChild("GameStateReplicator", 30)
+        local voteReplicator = stateReplicators and stateReplicators:WaitForChild("VoteReplicator", 30)
+        
+        if not gameStateReplicator or not voteReplicator then
+            while true do
+                pcall(HandlePostMatch)
+                task.wait(1)
+            end
+            return
+        end
+
+        while Globals.AutoRejoin do
+            local isGameOver = gameStateReplicator:GetAttribute("GameOver") == true
+            if isGameOver then
+                local health = gameStateReplicator:GetAttribute("Health") or 0
+                if health > 0 then
+                    if isfile("ADS_LastStrat.lua") then
+                        pcall(delfile, "ADS_LastStrat.lua")
+                    end
+                    pcall(HandlePostMatch)
+                    break
+                else
+                    task.spawn(pcall, HandlePostMatch, true)
+                    local lastVoteTime = 0
+                    while Globals.AutoRejoin do
+                        local title = voteReplicator:GetAttribute("Title")
+                        local enabled = voteReplicator:GetAttribute("Enabled")
+                        
+                        if enabled == true and title == "Restart?" then
+                            if os.clock() - lastVoteTime > 3 then
+                                pcall(function()
+                                    RemoteFunc:InvokeServer("Voting", "Skip")
+                                end)
+                                lastVoteTime = os.clock()
+                            end
+                        end
+                        
+                        if title == "Ready?" or gameStateReplicator:GetAttribute("GameOver") == false then
+                            break
+                        end
+                        task.wait(0.5)
+                    end
+                    
+                    if not Globals.AutoRejoin then break end
+                    
+                    if isfile("ADS_LastStrat.lua") then
+                        task.spawn(function()
+                            repeat
+                                task.wait(0.1)
+                                local towersFolder = workspace:FindFirstChild("Towers")
+                            until (towersFolder and #towersFolder:GetChildren() == 0) or not Globals.AutoRejoin
+                            
+                            if not Globals.AutoRejoin then return end
+                            TDS:ResetAllStates()
+                            TDS:RunStrategy()
+                        end)
+                    end
+                    
+                    repeat task.wait(1) until gameStateReplicator:GetAttribute("GameOver") == false or not Globals.AutoRejoin
+                end
+            end
+            task.wait(1)
         end
         BackToLobbyRunning = false
     end)
