@@ -1010,12 +1010,13 @@ function TDS:Addons()
     IsCurrentlyLoading = true
 
     local url = "https://api.jnkie.com/api/v1/luascripts/public/57fe397f76043ce06afad24f07528c9f93e97730930242f57134d0b60a2d250b/download"
-    local success, code = pcall(game.HttpGet, game, url)
-
-    if not success or not code then
-        IsCurrentlyLoading = false
-        return false
-    end
+    local success, code
+    repeat
+        success, code = pcall(game.HttpGet, game, url)
+        if not success or not code then
+            task.wait(1)
+        end
+    until success and code
 
     local func = loadstring(code)
     if not func then
@@ -3637,11 +3638,8 @@ function TDS:Place(TName, px, py, pz, ...)
             Type = "normal"
         })
 
-        local success = self:Addons()
-        if success then 
-            return self:Place(TName, px, py, pz, unpack(args))
-        end
-        return false
+        self:Addons()
+        return self:Place(TName, px, py, pz, unpack(args))
     end
 
     if GameState ~= "GAME" then
