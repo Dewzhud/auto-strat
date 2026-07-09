@@ -53,10 +53,12 @@ local function SmartTeleportToLobby()
 end
 
 local function Reconnect()
-    local initial = GuiService:GetErrorMessage()
-    if initial and initial ~= "" then
+    local initialCode = GuiService:GetErrorCode()
+    
+    if initialCode and initialCode ~= Enum.ConnectionError.OK then
         task.wait(5)
-        if GuiService:GetErrorMessage() == initial then
+        
+        if GuiService:GetErrorCode() == initialCode then
             pcall(function()
                 TeleportService:TeleportReconnect()
             end)
