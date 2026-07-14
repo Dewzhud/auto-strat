@@ -13,12 +13,12 @@ local themes = {
 			['Toggle'] = {
 				['Background'] = Color3.fromRGB(29, 28, 38),
 				['True'] = {
-					['Toggle Background'] = Color3.fromRGB(36, 35, 48),
-					['Toggle Value'] = Color3.fromRGB(24, 19, 142),
+					['Toggle Background'] = Color3.fromRGB(108, 30, 210),
+					['Toggle Value'] = Color3.fromRGB(225, 200, 255),
 				},
 				['False'] = {
 					['Toggle Background'] = Color3.fromRGB(36, 35, 48),
-					['Toggle Value'] = Color3.fromRGB(108, 30, 210),
+					['Toggle Value'] = Color3.fromRGB(150, 150, 150),
 				}
 			},
 			['Label'] = {
@@ -38,7 +38,7 @@ local themes = {
 				['Background'] = Color3.fromRGB(29, 28, 38),
 				['Value Background'] = Color3.fromRGB(24, 24, 31),
 				['Value Stroke'] = Color3.fromRGB(255, 255, 255),
-				['Slider Bar'] = Color3.fromRGB(24, 19, 142),
+				['Slider Bar'] = Color3.fromRGB(36, 35, 48),
 				['Slider Bar Value'] = Color3.fromRGB(108, 30, 210),
 				['Circle Value'] = Color3.fromRGB(255, 255, 255)
 			},
@@ -62,12 +62,12 @@ local themes = {
 				['Value Background'] = Color3.fromRGB(24, 24, 31),
 				['Value Stroke'] = Color3.fromRGB(255, 255, 255),
 				['True'] = {
-					['Toggle Background'] = Color3.fromRGB(24, 19, 142),
-					['Toggle Value'] = Color3.fromRGB(108, 30, 210),
+					['Toggle Background'] = Color3.fromRGB(108, 30, 210),
+					['Toggle Value'] = Color3.fromRGB(225, 200, 255),
 				},
 				['False'] = {
 					['Toggle Background'] = Color3.fromRGB(36, 35, 48),
-					['Toggle Value'] = Color3.fromRGB(44, 42, 62),
+					['Toggle Value'] = Color3.fromRGB(150, 150, 150),
 				}
 			},
 			['Color Picker'] = {

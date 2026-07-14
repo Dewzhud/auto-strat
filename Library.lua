@@ -225,6 +225,7 @@ local DefaultSettings = {
     DJCustomSongID = "",
     AutoNecro = false,
     AutoRejoin = true,
+    AutoRestart = true,
     PrivateCode = "",
     TimeScaleEnabled = false,
     TimeScaleValue = 2,
@@ -1253,11 +1254,33 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
     Automation:Section({Title = "Match Progression"})
     
     Automation:Toggle({
-        Title = "Auto Rejoin/Restart",
-        Desc = "Rejoins the game after a win, or restarts inside the match on a lose",
+        Title = "Auto Rejoin",
+        Desc = "Turn this ON only if you are running a WIN strat",
         Value = Globals.AutoRejoin,
         Callback = function(v)
             SetSetting("AutoRejoin", v)
+            if isfile("ADS_LastStrat.lua") then
+                pcall(delfile, "ADS_LastStrat.lua")
+            end
+            if v and GameState == "GAME" then
+                if #executed_actions > 0 then
+                    local content = "local TDS = shared.TDSTable or loadstring(game:HttpGet(\"https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua\"))()\n\n"
+                    content = content .. table.concat(executed_actions, "\n")
+                    writefile("ADS_LastStrat.lua", content)
+                end
+                if not BackToLobbyRunning then
+                    StartBackToLobby()
+                end
+            end
+        end
+    })
+
+    Automation:Toggle({
+        Title = "Auto Restart",
+        Desc = "Turn this ON only if you are running a LOSE strat",
+        Value = Globals.AutoRestart,
+        Callback = function(v)
+            SetSetting("AutoRestart", v)
             if isfile("ADS_LastStrat.lua") then
                 pcall(delfile, "ADS_LastStrat.lua")
             end
@@ -4123,54 +4146,64 @@ function StartBackToLobby()
             return
         end
 
-        while Globals.AutoRejoin do
+        while Globals.AutoRejoin or Globals.AutoRestart do
             local isGameOver = gameStateReplicator:GetAttribute("GameOver") == true
             if isGameOver then
                 local health = gameStateReplicator:GetAttribute("Health") or 0
                 if health > 0 then
-                    if isfile("ADS_LastStrat.lua") then
-                        pcall(delfile, "ADS_LastStrat.lua")
+                    if Globals.AutoRejoin then
+                        if isfile("ADS_LastStrat.lua") then
+                            pcall(delfile, "ADS_LastStrat.lua")
+                        end
+                        pcall(HandlePostMatch)
+                        break
                     end
-                    pcall(HandlePostMatch)
-                    break
                 else
-                    task.spawn(pcall, HandlePostMatch, true)
-                    local lastVoteTime = 0
-                    while Globals.AutoRejoin do
-                        local title = voteReplicator:GetAttribute("Title")
-                        local enabled = voteReplicator:GetAttribute("Enabled")
-                        
-                        if enabled == true and title == "Restart?" then
-                            if os.clock() - lastVoteTime > 3 then
-                                pcall(function()
-                                    RemoteFunc:InvokeServer("Voting", "Skip")
-                                end)
-                                lastVoteTime = os.clock()
-                            end
-                        end
-                        
-                        if title == "Ready?" or gameStateReplicator:GetAttribute("GameOver") == false then
-                            break
-                        end
-                        task.wait(0.5)
-                    end
-                    
-                    if not Globals.AutoRejoin then break end
-                    
-                    if isfile("ADS_LastStrat.lua") then
-                        task.spawn(function()
-                            repeat
-                                task.wait(0.1)
-                                local towersFolder = workspace:FindFirstChild("Towers")
-                            until (towersFolder and #towersFolder:GetChildren() == 0) or not Globals.AutoRejoin
+                    if Globals.AutoRestart then
+                        task.spawn(pcall, HandlePostMatch, true)
+                        local lastVoteTime = 0
+                        while Globals.AutoRestart do
+                            local title = voteReplicator:GetAttribute("Title")
+                            local enabled = voteReplicator:GetAttribute("Enabled")
                             
-                            if not Globals.AutoRejoin then return end
-                            TDS:ResetAllStates()
-                            TDS:RunStrategy()
-                        end)
+                            if enabled == true and title == "Restart?" then
+                                if os.clock() - lastVoteTime > 3 then
+                                    pcall(function()
+                                        RemoteFunc:InvokeServer("Voting", "Skip")
+                                    end)
+                                    lastVoteTime = os.clock()
+                                end
+                            end
+                            
+                            if title == "Ready?" or gameStateReplicator:GetAttribute("GameOver") == false then
+                                break
+                            end
+                            task.wait(0.5)
+                        end
+                        
+                        if not Globals.AutoRestart then break end
+                        
+                        if isfile("ADS_LastStrat.lua") then
+                            task.spawn(function()
+                                repeat
+                                    task.wait(0.1)
+                                    local towersFolder = workspace:FindFirstChild("Towers")
+                                until (towersFolder and #towersFolder:GetChildren() == 0) or not Globals.AutoRestart
+                                
+                                if not Globals.AutoRestart then return end
+                                TDS:ResetAllStates()
+                                TDS:RunStrategy()
+                            end)
+                        end
+                        
+                        repeat task.wait(1) until gameStateReplicator:GetAttribute("GameOver") == false or not Globals.AutoRestart
+                    elseif Globals.AutoRejoin then
+                        if isfile("ADS_LastStrat.lua") then
+                            pcall(delfile, "ADS_LastStrat.lua")
+                        end
+                        pcall(HandlePostMatch)
+                        break
                     end
-                    
-                    repeat task.wait(1) until gameStateReplicator:GetAttribute("GameOver") == false or not Globals.AutoRejoin
                 end
             end
             task.wait(1)
@@ -4622,7 +4655,7 @@ task.spawn(function()
             StartAntiLag()
         end
 
-        if Globals.AutoRejoin and not BackToLobbyRunning then
+        if (Globals.AutoRejoin or Globals.AutoRestart) and not BackToLobbyRunning then
             StartBackToLobby()
         end
 
