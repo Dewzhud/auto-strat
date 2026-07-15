@@ -189,6 +189,10 @@ local AutoMilitaryBaseRunning = false
 local SellFarmsRunning = false
 local AutoGatlingRunning = false
 local GatlingExecuted = false
+local GatlifyRunning = false
+local GatlifyExecuted = false
+local IsCurrentlyLoading = false
+local LastLoadTime = 0
 local AutoPremiumRunning = false
 local StackerErrorShown = false
 local PremiumLoaded = false
@@ -219,6 +223,7 @@ local DefaultSettings = {
     AutoReady = false,
     AutoChain = false,
     AutoGatling = false,
+    Gatlify = false,
     AutoPremium = false,
     SupportCaravan = false,
     AutoDJ = false,
@@ -998,15 +1003,12 @@ local function MissionsUIFix()
     end)
 end
 
-local IsCurrentlyLoading = false
-
 function TDS:Addons()
     if GameState == "LOBBY" then return false end
     if PremiumLoaded then return true end
     
-    if IsCurrentlyLoading then 
-        while IsCurrentlyLoading do task.wait(0.1) end
-        return PremiumLoaded 
+    while IsCurrentlyLoading or (os.clock() - LastLoadTime < 5) do 
+        task.wait(0.1) 
     end
 
     local originalPlace = self.Place
@@ -1024,6 +1026,7 @@ function TDS:Addons()
     local func = loadstring(code)
     if not func then
         IsCurrentlyLoading = false
+        LastLoadTime = os.clock()
         return false
     end
 
@@ -1035,6 +1038,7 @@ function TDS:Addons()
 
     PremiumLoaded = true
     IsCurrentlyLoading = false
+    LastLoadTime = os.clock()
     return true
 end
 
@@ -1255,7 +1259,7 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
     
     Automation:Toggle({
         Title = "Auto Rejoin",
-        Desc = "Turn this ON only if you are running a WIN strat",
+        Desc = "Turn this ON if you are running a WIN strat",
         Value = Globals.AutoRejoin,
         Callback = function(v)
             SetSetting("AutoRejoin", v)
@@ -1277,7 +1281,7 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
 
     Automation:Toggle({
         Title = "Auto Restart",
-        Desc = "Turn this ON only if you are running a LOSE strat",
+        Desc = "Turn this ON if you are running a LOSE strat",
         Value = Globals.AutoRestart,
         Callback = function(v)
             SetSetting("AutoRestart", v)
@@ -1528,6 +1532,15 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
         Value = Globals.AutoGatling,
         Callback = function(v)
             SetSetting("AutoGatling", v)
+        end
+    })
+
+    Automation:Toggle({
+        Title = "Gatlify",
+        Desc = "Gatling gun script but better, more stable, with fixed lags and more features than Railgun (includes a key system)",
+        Value = Globals.Gatlify,
+        Callback = function(v)
+            SetSetting("Gatlify", v)
         end
     })
 
@@ -2807,7 +2820,7 @@ local function HandlePostMatch(skipRejoin)
             return
         end
     end
-    if not Globals.AutoRejoin then return end
+    if not Globals.AutoRejoin and not Globals.AutoRestart then return end
 
     if not Globals.SendWebhook then
         if not skipRejoin then
@@ -3932,6 +3945,34 @@ local function StartAutoGatling()
     end)
 end
 
+local function StartGatlify()
+    if GatlifyRunning or not Globals.Gatlify then return end
+    GatlifyRunning = true
+    task.spawn(function()
+        while Globals.Gatlify do
+            if GameState == "GAME" then
+                if not GatlifyExecuted then
+                    repeat task.wait(0.5) until not IsCurrentlyLoading and (os.clock() - LastLoadTime >= 5)
+                    if not Globals.Gatlify then break end
+                    if not GatlifyExecuted then
+                        IsCurrentlyLoading = true
+                        GatlifyExecuted = true 
+                        pcall(function()
+                            loadstring(game:HttpGet("https://raw.githubusercontent.com/avtryxz/Gatlify/refs/heads/main/Gatlify.lua"))()
+                        end)
+                        IsCurrentlyLoading = false
+                        LastLoadTime = os.clock()
+                    end
+                end
+            else
+                GatlifyExecuted = false 
+            end
+            task.wait(1)
+        end
+        GatlifyRunning = false
+    end)
+end
+
 local function StartAutoPremium()
     if AutoPremiumRunning or not Globals.AutoPremium or PremiumLoaded then return end
     AutoPremiumRunning = true
@@ -4661,6 +4702,10 @@ task.spawn(function()
 
         if Globals.AutoGatling and not AutoGatlingRunning then
             StartAutoGatling()
+        end
+
+        if Globals.Gatlify and not GatlifyRunning then
+            StartGatlify()
         end
 
         if Globals.AutoPremium and not AutoPremiumRunning then
