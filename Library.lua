@@ -1631,6 +1631,16 @@ local Interactive = Window:Tab({Title = "Interactive", Icon = "mouse-pointer-cli
     })
 
     Interactive:Button({
+        Title = "Open Inventory",
+        Desc = "Place initial towers, then click this to swap loadout before readying up (bypasses 5-tower limit).\nNote: Does not work on low sUNC executors like Solara/Xeno",
+        Callback = function()
+            pcall(function()
+                require(game:GetService("ReplicatedStorage").Client.Interfaces.LegacyInterface.Controllers.ViewController):setView("Inventory")
+            end)
+        end
+    })
+
+    Interactive:Button({
         Title = "Upgrade Selected",
         Desc = "",
         Callback = function()
