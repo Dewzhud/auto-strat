@@ -1122,7 +1122,7 @@ local function RunVoteSkip()
             RemoteFunc:InvokeServer("Voting", "Skip")
         end)
         if success then break end
-        task.wait(0.2)
+        task.wait(0.1)
     end
 end
 
