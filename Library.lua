@@ -2817,8 +2817,24 @@ local function RequestRematch()
     local rematch = gameManager and gameManager:WaitForChild("RE:Rematch", 10)
 
     if not rematch then return false end
-    rematch:FireServer()
-    return true
+
+    local stateReplicators = ReplicatedStorage:FindFirstChild("StateReplicators")
+    local gameStateReplicator = stateReplicators and stateReplicators:FindFirstChild("GameStateReplicator")
+    local voteReplicator = stateReplicators and stateReplicators:FindFirstChild("VoteReplicator")
+    local health = gameStateReplicator and gameStateReplicator:GetAttribute("Health")
+    local needsRestartVote = health ~= nil
+        and health <= 0
+        and voteReplicator
+        and voteReplicator:GetAttribute("Enabled") == true
+        and voteReplicator:GetAttribute("Title") == "Restart?"
+
+    local ok = pcall(function()
+        if needsRestartVote then
+            RemoteFunc:InvokeServer("Voting", "Skip")
+        end
+        rematch:FireServer()
+    end)
+    return ok
 end
 
 local function HandlePostMatch(skipRejoin)
@@ -3235,7 +3251,7 @@ local function TriggerRestart()
     until FoundSection
 
     task.wait(3)
-    RunVoteSkip()
+    RequestRematch()
 end
 
 local function GetCurrentWave()
@@ -4222,21 +4238,18 @@ function StartBackToLobby()
                 else
                     if Globals.AutoRestart then
                         task.spawn(pcall, HandlePostMatch, true)
-                        local lastVoteTime = 0
+                        local lastRematchTime = 0
                         local rematchRequested = false
                         while Globals.AutoRestart do
                             local title = voteReplicator:GetAttribute("Title")
                             local enabled = voteReplicator:GetAttribute("Enabled")
                             
                             if enabled == true and title == "Restart?" then
-                                if os.clock() - lastVoteTime > 3 then
-                                    pcall(function()
-                                        RemoteFunc:InvokeServer("Voting", "Skip")
-                                        if not rematchRequested then
-                                            rematchRequested = RequestRematch()
-                                        end
-                                    end)
-                                    lastVoteTime = os.clock()
+                                if os.clock() - lastRematchTime > 3 then
+                                    if not rematchRequested then
+                                        rematchRequested = RequestRematch()
+                                    end
+                                    lastRematchTime = os.clock()
                                 end
                             end
                             
