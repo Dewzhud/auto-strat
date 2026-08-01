@@ -2811,6 +2811,16 @@ local function RejoinMatch()
     return res
 end
 
+local function RequestRematch()
+    local network = ReplicatedStorage:WaitForChild("Network", 10)
+    local gameManager = network and network:WaitForChild("GameManager", 10)
+    local rematch = gameManager and gameManager:WaitForChild("RE:Rematch", 10)
+
+    if not rematch then return false end
+    rematch:FireServer()
+    return true
+end
+
 local function HandlePostMatch(skipRejoin)
     local UiRoot
     repeat
@@ -2825,7 +2835,7 @@ local function HandlePostMatch(skipRejoin)
 
     if not UiRoot then 
         if not skipRejoin then
-            return RejoinMatch() 
+            return RequestRematch()
         else
             return
         end
@@ -2834,7 +2844,7 @@ local function HandlePostMatch(skipRejoin)
 
     if not Globals.SendWebhook then
         if not skipRejoin then
-            RejoinMatch()
+            RequestRematch()
         end
         return
     end
@@ -2904,7 +2914,7 @@ local function HandlePostMatch(skipRejoin)
     task.wait(1.5)
 
     if not skipRejoin then
-        RejoinMatch()
+        RequestRematch()
     end
 
     task.wait(9e9)
@@ -4213,6 +4223,7 @@ function StartBackToLobby()
                     if Globals.AutoRestart then
                         task.spawn(pcall, HandlePostMatch, true)
                         local lastVoteTime = 0
+                        local rematchRequested = false
                         while Globals.AutoRestart do
                             local title = voteReplicator:GetAttribute("Title")
                             local enabled = voteReplicator:GetAttribute("Enabled")
@@ -4221,6 +4232,9 @@ function StartBackToLobby()
                                 if os.clock() - lastVoteTime > 3 then
                                     pcall(function()
                                         RemoteFunc:InvokeServer("Voting", "Skip")
+                                        if not rematchRequested then
+                                            rematchRequested = RequestRematch()
+                                        end
                                     end)
                                     lastVoteTime = os.clock()
                                 end
