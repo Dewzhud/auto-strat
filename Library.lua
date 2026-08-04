@@ -2668,8 +2668,9 @@ local function GetAllRewards()
         for _, frame in ipairs(StatsList:GetChildren()) do
             local l1 = frame:FindFirstChild("textLabel")
             local l2 = frame:FindFirstChild("textLabel2")
-            if l1 and l2 and l1.Text:find("Time Completed:") then
-                results.Time = l2.Text
+            local refLabel = l2 and l2:FindFirstChild("refLabel")
+            if l1 and refLabel and l1.Text:find("Time Completed:") then
+                results.Time = refLabel.Text
                 break
             end
         end
@@ -2811,32 +2812,6 @@ local function RejoinMatch()
     return res
 end
 
-local function RequestRematch()
-    local network = ReplicatedStorage:WaitForChild("Network", 10)
-    local gameManager = network and network:WaitForChild("GameManager", 10)
-    local rematch = gameManager and gameManager:WaitForChild("RE:Rematch", 10)
-
-    if not rematch then return false end
-
-    local stateReplicators = ReplicatedStorage:FindFirstChild("StateReplicators")
-    local gameStateReplicator = stateReplicators and stateReplicators:FindFirstChild("GameStateReplicator")
-    local voteReplicator = stateReplicators and stateReplicators:FindFirstChild("VoteReplicator")
-    local health = gameStateReplicator and gameStateReplicator:GetAttribute("Health")
-    local needsRestartVote = health ~= nil
-        and health <= 0
-        and voteReplicator
-        and voteReplicator:GetAttribute("Enabled") == true
-        and voteReplicator:GetAttribute("Title") == "Restart?"
-
-    local ok = pcall(function()
-        if needsRestartVote then
-            RemoteFunc:InvokeServer("Voting", "Skip")
-        end
-        rematch:FireServer()
-    end)
-    return ok
-end
-
 local function HandlePostMatch(skipRejoin)
     local UiRoot
     repeat
@@ -2851,7 +2826,7 @@ local function HandlePostMatch(skipRejoin)
 
     if not UiRoot then 
         if not skipRejoin then
-            return RequestRematch()
+            return RejoinMatch() 
         else
             return
         end
@@ -2860,7 +2835,7 @@ local function HandlePostMatch(skipRejoin)
 
     if not Globals.SendWebhook then
         if not skipRejoin then
-            RequestRematch()
+            RejoinMatch()
         end
         return
     end
@@ -2930,7 +2905,7 @@ local function HandlePostMatch(skipRejoin)
     task.wait(1.5)
 
     if not skipRejoin then
-        RequestRematch()
+        RejoinMatch()
     end
 
     task.wait(9e9)
@@ -3251,7 +3226,7 @@ local function TriggerRestart()
     until FoundSection
 
     task.wait(3)
-    RequestRematch()
+    RunVoteSkip()
 end
 
 local function GetCurrentWave()
@@ -4238,18 +4213,17 @@ function StartBackToLobby()
                 else
                     if Globals.AutoRestart then
                         task.spawn(pcall, HandlePostMatch, true)
-                        local lastRematchTime = 0
-                        local rematchRequested = false
+                        local lastVoteTime = 0
                         while Globals.AutoRestart do
                             local title = voteReplicator:GetAttribute("Title")
                             local enabled = voteReplicator:GetAttribute("Enabled")
                             
                             if enabled == true and title == "Restart?" then
-                                if os.clock() - lastRematchTime > 3 then
-                                    if not rematchRequested then
-                                        rematchRequested = RequestRematch()
-                                    end
-                                    lastRematchTime = os.clock()
+                                if os.clock() - lastVoteTime > 3 then
+                                    pcall(function()
+                                        RemoteFunc:InvokeServer("Voting", "Skip")
+                                    end)
+                                    lastVoteTime = os.clock()
                                 end
                             end
                             
