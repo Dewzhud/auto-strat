@@ -225,6 +225,7 @@ local DefaultSettings = {
     AutoGatling = false,
     Gatlify = false,
     AutoPremium = false,
+    AutoFarmUntilGatling = false,
     SupportCaravan = false,
     AutoDJ = false,
     DJCustomSongID = "",
@@ -1218,6 +1219,74 @@ task.spawn(function()
     end
 end)
 
+local function GetAutoProgressLevel()
+    local levelObject = LocalPlayer:FindFirstChild("Level")
+
+    if levelObject then
+        local ok, value = pcall(function()
+            return levelObject.Value
+        end)
+
+        if ok and tonumber(value) then
+            return tonumber(value)
+        end
+    end
+
+    local attribute = LocalPlayer:GetAttribute("Level")
+
+    if tonumber(attribute) then
+        return tonumber(attribute)
+    end
+
+    return 0
+end
+
+local AUTO_PROGRESS_URL = ""
+local AutoProgressLoaded = false
+
+local function LoadAutoProgress()
+    if AutoProgressLoaded and shared.AutoProgress then
+        return shared.AutoProgress
+    end
+
+    if AUTO_PROGRESS_URL == "" then
+        return nil
+    end
+
+    local success, code
+
+    repeat
+        success, code = pcall(game.HttpGet, game, AUTO_PROGRESS_URL)
+
+        if not success or not code then
+            task.wait(1)
+        end
+    until success and code
+
+    local func = loadstring(code)
+
+    if not func then
+        warn("[AUTO PROGRESS] Failed to compile")
+        return nil
+    end
+
+    local ok, api = pcall(func)
+
+    if not ok then
+        warn("[AUTO PROGRESS] Failed to load:", api)
+        return nil
+    end
+
+    if type(api) ~= "table" then
+        warn("[AUTO PROGRESS] Module did not return API")
+        return nil
+    end
+
+    shared.AutoProgress = api
+    AutoProgressLoaded = true
+
+    return api
+end
 -- // ui
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Sources/UI.lua"))()
 
@@ -1352,6 +1421,189 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
             SetSetting("Modifiers", choice)
         end
     })
+
+    Automation:Section({Title = "Auto Progress"})
+
+    local function IsGatlingOwnedFrontend()
+        local inventory = PlayerGui:FindFirstChild("ReactUniversalInventoryView")
+
+        if not inventory then
+            return false
+        end
+
+        local holder = inventory:FindFirstChild("Holder")
+        local windowFrame = holder and holder:FindFirstChild("windowFrame")
+        local towerFrame = windowFrame and windowFrame:FindFirstChild("towersInventoryFrame")
+
+        if not towerFrame then
+            return false
+        end
+
+        for _, tower in ipairs(towerFrame:GetDescendants()) do
+            if tower:IsA("Frame") then
+                local refLabel = tower:FindFirstChild("refLabel", true)
+                local background = tower:FindFirstChild("background", true)
+
+                if refLabel
+                    and background
+                    and refLabel.Text == "Gatling Gun"
+                    and background.Visible == false then
+
+                    return true
+                end
+            end
+        end
+
+        return false
+    end
+
+    local AutoProgressCompleted = IsGatlingOwnedFrontend()
+
+    if AutoProgressCompleted then
+        SetSetting("AutoFarmUntilGatling", false)
+    elseif AUTO_PROGRESS_URL == "" then
+        SetSetting("AutoFarmUntilGatling", false)
+    end
+
+    local function GetAutoProgressIdleText()
+        if AutoProgressCompleted then
+            return "Gatling Unlocked"
+        end
+
+        if AUTO_PROGRESS_URL == "" then
+            return "Coming Soon"
+        end
+
+        return "Status: Disabled | Level: " .. tostring(GetAutoProgressLevel())
+    end
+
+    local AutoProgressInfoLabel = Automation:Label({
+        Title = GetAutoProgressIdleText(),
+        Desc = ""
+    })
+
+    local AutoProgressToggle = Automation:Toggle({
+        Title = "Auto Farm Until Gatling",
+        Desc = AUTO_PROGRESS_URL == ""
+            and "Coming Soon"
+            or "Automatically progresses the account until Gatling Gun is unlocked",
+        Value = AutoProgressCompleted
+            and false
+            or (AUTO_PROGRESS_URL ~= "" and Globals.AutoFarmUntilGatling or false),
+
+        Callback = function(v)
+            if AutoProgressCompleted then
+                SetSetting("AutoFarmUntilGatling", false)
+                AutoProgressInfoLabel:SetTitle("Gatling Unlocked")
+                return
+            end
+
+            if AUTO_PROGRESS_URL == "" then
+                SetSetting("AutoFarmUntilGatling", false)
+                AutoProgressInfoLabel:SetTitle("Coming Soon")
+                return
+            end
+
+            SetSetting("AutoFarmUntilGatling", v)
+
+            if v then
+                SetSetting("AutoRejoin", false)
+                SetSetting("AutoRestart", false)
+                SetSetting("AutoReady", false)
+                SetSetting("AutoSkip", false)
+                SetSetting("AutoPremium", false)
+
+                AutoProgressInfoLabel:SetTitle(
+                    "Status: Loading Auto Progress... | Level: "
+                    .. tostring(GetAutoProgressLevel())
+                )
+
+                local AutoProgress = LoadAutoProgress()
+
+                if AutoProgress then
+                    AutoProgress.Start()
+                else
+                    AutoProgressInfoLabel:SetTitle(
+                        "Status: Failed to Load | Level: "
+                        .. tostring(GetAutoProgressLevel())
+                    )
+                end
+            else
+                if shared.AutoProgress then
+                    shared.AutoProgress.Stop()
+                end
+
+                AutoProgressInfoLabel:SetTitle(
+                    "Status: Disabled | Level: "
+                    .. tostring(GetAutoProgressLevel())
+                )
+            end
+        end
+    })
+
+    task.spawn(function()
+        while true do
+            task.wait(0.5)
+
+            local level = GetAutoProgressLevel()
+
+            if not AutoProgressCompleted and IsGatlingOwnedFrontend() then
+                AutoProgressCompleted = true
+                SetSetting("AutoFarmUntilGatling", false)
+                AutoProgressInfoLabel:SetTitle("Gatling Unlocked")
+                continue
+            end
+
+            if AutoProgressCompleted then
+                AutoProgressInfoLabel:SetTitle("Gatling Unlocked")
+                continue
+            end
+
+            if AUTO_PROGRESS_URL == "" then
+                AutoProgressInfoLabel:SetTitle("Coming Soon")
+                continue
+            end
+
+            if Globals.AutoFarmUntilGatling and shared.AutoProgress then
+                local statusOk, status = pcall(function()
+                    return shared.AutoProgress.GetStatus()
+                end)
+
+                local levelOk, autoLevel = pcall(function()
+                    return shared.AutoProgress.GetLevel()
+                end)
+
+                if levelOk and autoLevel ~= nil then
+                    level = autoLevel
+                end
+
+                if statusOk and tostring(status) == "Gatling Unlocked" then
+                    AutoProgressCompleted = true
+                    SetSetting("AutoFarmUntilGatling", false)
+                    AutoProgressInfoLabel:SetTitle("Gatling Unlocked")
+                    continue
+                end
+
+                if statusOk and status then
+                    AutoProgressInfoLabel:SetTitle(
+                        tostring(status)
+                        .. " | Level: "
+                        .. tostring(level)
+                    )
+                else
+                    AutoProgressInfoLabel:SetTitle(
+                        "Status: Running | Level: "
+                        .. tostring(level)
+                    )
+                end
+            else
+                AutoProgressInfoLabel:SetTitle(
+                    "Status: Disabled | Level: "
+                    .. tostring(level)
+                )
+            end
+        end
+    end)
 
     Automation:Section({Title = "Auto-Abilities"})
     
