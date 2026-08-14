@@ -1491,7 +1491,7 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
         Title = "Auto Farm Until Gatling",
         Desc = AUTO_PROGRESS_URL == ""
             and "Coming Soon"
-            or "Automatically progresses the account until Gatling Gun is unlocked",
+            or "Automatically progresses the account until Gatling Gun is unlocked (USING LOSE STRAT)",
         Value = AutoProgressCompleted
             and false
             or (AUTO_PROGRESS_URL ~= "" and Globals.AutoFarmUntilGatling or false),
