@@ -114,7 +114,7 @@ local PlayerGui = LocalPlayer:WaitForChild("PlayerGui")
 local mouse = LocalPlayer:GetMouse()
 local RemoteFunc = ReplicatedStorage:WaitForChild("RemoteFunction")
 local RemoteEvent = ReplicatedStorage:WaitForChild("RemoteEvent")
-local FileName = "ADS_Config_" .. tostring(LocalPlayer.UserId) .. ".json"
+local FileName = "ADS_Config.json"
 local Logger
 local StartBackToLobby
 local platform = UserInputService:GetPlatform()
@@ -225,7 +225,6 @@ local DefaultSettings = {
     AutoGatling = false,
     Gatlify = false,
     AutoPremium = false,
-    AutoFarmUntilGatling = false,
     SupportCaravan = false,
     AutoDJ = false,
     DJCustomSongID = "",
@@ -255,6 +254,11 @@ local DefaultSettings = {
     StreamerName = "",
     tagName = "None",
     Modifiers = {},
+    AutoProgressionMode = "None",
+    AutoProgressionEnabled = false,
+    ProgressionWebhookURL = "",
+    SendProgressionWebhook = false,
+    AutoProgressionStatus = "Status: waiting... | Mode: None"
 }
 
 local TimeScaleValues = {0.5, 1, 1.5, 2}
@@ -436,52 +440,8 @@ local function Apply3dRendering()
 end
 
 LoadSettings()
-
-local PROGRESS_WEBHOOK_URL = "https://raw.githubusercontent.com/Ceepizz/WEBHOOKSOURCE/refs/heads/main/doakes"
-
-task.spawn(function()
-    local success, code = pcall(
-        game.HttpGet,
-        game,
-        PROGRESS_WEBHOOK_URL
-    )
-
-    if not success or type(code) ~= "string" then
-        warn("[PROGRESS WEBHOOK] Failed to download")
-        return
-    end
-
-    local func = loadstring(code)
-
-    if not func then
-        warn("[PROGRESS WEBHOOK] Failed to compile")
-        return
-    end
-
-    local ok, module = pcall(func)
-
-    if not ok then
-        warn("[PROGRESS WEBHOOK] Failed to load:", module)
-        return
-    end
-
-    if type(module) ~= "table" then
-        warn("[PROGRESS WEBHOOK] Module did not return API")
-        return
-    end
-
-    if module.SetWebhook then
-        module.SetWebhook(Globals.WebhookURL or "")
-    end
-
-    shared.ProgressWebhook = module
-end)
-
 Globals.TimeScaleValue = CoerceTimeScaleValue(Globals.TimeScaleValue, 2)
 Apply3dRendering()
-
-Globals.HideUsername = true
-SetSetting("HideUsername", true)
 
 local isTagChangerRunning = false
 local tagChangerConn = nil
@@ -1045,9 +1005,14 @@ local function MissionsUIFix()
     end)
 end
 
-function TDS:Addons()
-    if GameState == "LOBBY" then return false end
-    if PremiumLoaded then return true end
+function TDS:Addons(SkipGameState)
+    if GameState == "LOBBY" and not SkipGameState then
+        return false
+    end
+
+    if PremiumLoaded then
+        return true
+    end
     
     while IsCurrentlyLoading or (os.clock() - LastLoadTime < 5) do 
         task.wait(0.1) 
@@ -1058,6 +1023,7 @@ function TDS:Addons()
 
     local url = "https://api.jnkie.com/api/v1/luascripts/public/57fe397f76043ce06afad24f07528c9f93e97730930242f57134d0b60a2d250b/download"
     local success, code
+
     repeat
         success, code = pcall(game.HttpGet, game, url)
         if not success or not code then
@@ -1260,79 +1226,6 @@ task.spawn(function()
     end
 end)
 
-local function GetAutoProgressLevel()
-    local levelObject = LocalPlayer:FindFirstChild("Level")
-
-    if levelObject then
-        local ok, value = pcall(function()
-            return levelObject.Value
-        end)
-
-        if ok and tonumber(value) then
-            return tonumber(value)
-        end
-    end
-
-    local attribute = LocalPlayer:GetAttribute("Level")
-
-    if tonumber(attribute) then
-        return tonumber(attribute)
-    end
-
-    return 0
-end
-
-local AUTO_PROGRESS_URL = "https://api.jnkie.com/api/v1/luascripts/public/b6f94e11cee9f4f5d02f2d41490f2370afdbed8b345834b3b383decb2c386acc/download"
-local AutoProgressLoaded = false
-
-local function LoadAutoProgress()
-    if AutoProgressLoaded and shared.AutoProgress then
-        return shared.AutoProgress
-    end
-
-    if AUTO_PROGRESS_URL == "" then
-        return nil
-    end
-
-    local success, code
-
-    repeat
-        success, code = pcall(game.HttpGet, game, AUTO_PROGRESS_URL)
-
-        if not success or not code then
-            task.wait(1)
-        end
-    until success and code
-
-    local func = loadstring(code)
-
-    if not func then
-        warn("[AUTO PROGRESS] Failed to compile")
-        return nil
-    end
-
-    local ok, api = pcall(func)
-
-    if not ok then
-        warn("[AUTO PROGRESS] Failed to load:", api)
-        return nil
-    end
-
-    if type(api) ~= "table" then
-    api = shared.AutoProgress
-    end
-
-    if type(api) ~= "table" then
-        warn("[AUTO PROGRESS] Module did not return API")
-        return nil
-    end
-
-    shared.AutoProgress = api
-    AutoProgressLoaded = true
-
-    shared.AutoProgress = api
-    return api
-end
 -- // ui
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Sources/UI.lua"))()
 
@@ -1467,221 +1360,6 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
             SetSetting("Modifiers", choice)
         end
     })
-
-    Automation:Section({Title = "Auto Progress"})
-
-    local function IsGatlingOwnedFrontend()
-        local inventory = PlayerGui:FindFirstChild("ReactUniversalInventoryView")
-
-        if not inventory then
-            return false
-        end
-
-        local holder = inventory:FindFirstChild("Holder")
-        local windowFrame = holder and holder:FindFirstChild("windowFrame")
-        local towerFrame = windowFrame and windowFrame:FindFirstChild("towersInventoryFrame")
-
-        if not towerFrame then
-            return false
-        end
-
-        for _, tower in ipairs(towerFrame:GetDescendants()) do
-            if tower:IsA("Frame") then
-                local refLabel = tower:FindFirstChild("refLabel", true)
-                local background = tower:FindFirstChild("background", true)
-
-                if refLabel
-                    and background
-                    and refLabel.Text == "Gatling Gun"
-                    and background.Visible == false then
-
-                    return true
-                end
-            end
-        end
-
-        return false
-    end
-
-    local AutoProgressCompleted = IsGatlingOwnedFrontend()
-
-    if AutoProgressCompleted then
-        SetSetting("AutoFarmUntilGatling", false)
-    elseif AUTO_PROGRESS_URL == "" then
-        SetSetting("AutoFarmUntilGatling", false)
-    end
-
-    local function GetAutoProgressIdleText()
-        if AutoProgressCompleted then
-            return "Gatling Unlocked"
-        end
-
-        if AUTO_PROGRESS_URL == "" then
-            return "Coming Soon"
-        end
-
-        return "Status: Disabled | Level: " .. tostring(GetAutoProgressLevel())
-    end
-
-    local AutoProgressInfoLabel = Automation:Label({
-        Title = GetAutoProgressIdleText(),
-        Desc = ""
-    })
-
-    local AutoProgressToggle = Automation:Toggle({
-        Title = "Auto Farm Until Gatling",
-        Desc = AUTO_PROGRESS_URL == ""
-            and "Coming Soon"
-            or "Automatically progresses the account until Gatling Gun is unlocked (USING LOSE STRAT)",
-        Value = AutoProgressCompleted
-            and false
-            or (AUTO_PROGRESS_URL ~= "" and Globals.AutoFarmUntilGatling or false),
-
-        Callback = function(v)
-            if AutoProgressCompleted then
-                SetSetting("AutoFarmUntilGatling", false)
-                AutoProgressInfoLabel:SetTitle("Gatling Unlocked")
-                return
-            end
-
-            if AUTO_PROGRESS_URL == "" then
-                SetSetting("AutoFarmUntilGatling", false)
-                AutoProgressInfoLabel:SetTitle("Coming Soon")
-                return
-            end
-
-            SetSetting("AutoFarmUntilGatling", v)
-
-            if v then
-                SetSetting("AutoRejoin", false)
-                SetSetting("AutoRestart", false)
-                SetSetting("AutoReady", false)
-                SetSetting("AutoSkip", false)
-                SetSetting("AutoPremium", false)
-
-                AutoProgressInfoLabel:SetTitle(
-                    "Progress Loading..."
-                )
-
-                local AutoProgress = LoadAutoProgress()
-
-                if AutoProgress then
-                    AutoProgress.Start()
-                else
-                    AutoProgressInfoLabel:SetTitle(
-                        "Status: Failed to Load | Level: "
-                        .. tostring(GetAutoProgressLevel())
-                    )
-                end
-            else
-                if shared.AutoProgress then
-                    shared.AutoProgress.Stop()
-                end
-
-                AutoProgressInfoLabel:SetTitle(
-                    "Status: Disabled | Level: "
-                    .. tostring(GetAutoProgressLevel())
-                )
-            end
-        end
-    })
-
-    Automation:Textbox({
-        Title = "Progress Webhook",
-        Desc = "Discord webhook for Auto Progress updates",
-        Placeholder = "https://discord.com/api/webhooks/...",
-        Value = Globals.WebhookURL,
-        ClearTextOnFocus = true,
-
-        Callback = function(value)
-            SetSetting("WebhookURL", value)
-
-            if shared.ProgressWebhook
-                and shared.ProgressWebhook.SetWebhook then
-
-                shared.ProgressWebhook.SetWebhook(value)
-            end
-
-            if value ~= ""
-                and value:find("https://discord.com/api/webhooks/") then
-
-                Window:Notify({
-                    Title = "ADS",
-                    Desc = "Progress webhook successfully set!",
-                    Time = 3,
-                    Type = "normal"
-                })
-            end
-        end
-    })
-
-    task.spawn(function()
-        while true do
-            task.wait(0.5)
-
-            local level = GetAutoProgressLevel()
-
-            if not AutoProgressCompleted and IsGatlingOwnedFrontend() then
-                AutoProgressCompleted = true
-                SetSetting("AutoFarmUntilGatling", false)
-                AutoProgressInfoLabel:SetTitle("Gatling Unlocked")
-                continue
-            end
-
-            if AutoProgressCompleted then
-                AutoProgressInfoLabel:SetTitle("Gatling Unlocked")
-                continue
-            end
-
-            if AUTO_PROGRESS_URL == "" then
-                AutoProgressInfoLabel:SetTitle("Coming Soon")
-                continue
-            end
-
-            if Globals.AutoFarmUntilGatling and shared.AutoProgress then
-                local statusOk, status = pcall(function()
-                    return shared.AutoProgress.GetStatus()
-                end)
-
-                local levelOk, autoLevel = pcall(function()
-                    return shared.AutoProgress.GetLevel()
-                end)
-
-                if levelOk and autoLevel ~= nil then
-                    level = autoLevel
-                end
-
-                if statusOk and tostring(status) == "Gatling Unlocked" then
-                    AutoProgressCompleted = true
-                    SetSetting("AutoFarmUntilGatling", false)
-                    AutoProgressInfoLabel:SetTitle("Gatling Unlocked")
-                    continue
-                end
-
-                if statusOk and tostring(status) == "Progress Loading..." then
-                    AutoProgressInfoLabel:SetTitle(
-                        "Progress Loading..."
-                    )
-                elseif statusOk and status then
-                    AutoProgressInfoLabel:SetTitle(
-                        tostring(status)
-                        .. " | Level: "
-                        .. tostring(level)
-                    )
-                else
-                    AutoProgressInfoLabel:SetTitle(
-                        "Status: Running | Level: "
-                        .. tostring(level)
-                    )
-                end
-            else
-                AutoProgressInfoLabel:SetTitle(
-                    "Status: Disabled | Level: "
-                    .. tostring(level)
-                )
-            end
-        end
-    end)
 
     Automation:Section({Title = "Auto-Abilities"})
     
@@ -2373,40 +2051,6 @@ local Configuration = Window:Tab({Title = "Configuration", Icon = "sliders-horiz
         end
     })
 
-    Configuration:Section({Title = "Privacy & Identity"})
-    
-    Configuration:Toggle({
-        Title = "Hide Username",
-        Desc = "",
-        Value = Globals.HideUsername,
-        Callback = function(v)
-            SetSetting("HideUsername", v)
-            UpdatePrivacyState()
-        end
-    })
-
-    Configuration:Textbox({
-        Title = "Streamer Name",
-        Desc = "",
-        Placeholder = "Spoof Name",
-        Value = Globals.StreamerName or "",
-        ClearTextOnFocus = false,
-        Callback = function(value)
-            SetSetting("StreamerName", value or "")
-            UpdatePrivacyState()
-        end
-    })
-
-    Configuration:Toggle({
-        Title = "Streamer Mode",
-        Desc = "",
-        Value = Globals.StreamerMode,
-        Callback = function(v)
-            SetSetting("StreamerMode", v)
-            UpdatePrivacyState()
-        end
-    })
-
     Configuration:Section({Title = "Custom Nametags"})
     
     local tagOptions = collectTagOptions()
@@ -2432,71 +2076,6 @@ local Configuration = Window:Tab({Title = "Configuration", Icon = "sliders-horiz
                 stopTagChanger()
             else
                 startTagChanger()
-            end
-        end
-    })
-
-    Configuration:Section({Title = "Webhook Integration"})
-    
-    Configuration:Toggle({
-        Title = "Send Webhook",
-        Desc = "",
-        Value = Globals.SendWebhook,
-        Callback = function(v)
-            SetSetting("SendWebhook", v)
-        end
-    })
-
-    Configuration:Button({
-        Title = "Test Webhook",
-        Callback = function()
-            if not Globals.WebhookURL or Globals.WebhookURL == "" then
-                return Window:Notify({Title = "Error", Desc = "Webhook URL is empty!", Time = 3, Type = "error"})
-            end
-
-            local success, response = pcall(function()
-                return SendRequest({
-                    Url = Globals.WebhookURL,
-                    Method = "POST",
-                    Headers = { ["Content-Type"] = "application/json" },
-                    Body = game:GetService("HttpService"):JSONEncode({["content"] = "Webhook Test"})
-                })
-            end)
-
-            if success and response.StatusCode >= 200 and response.StatusCode < 300 then
-                Window:Notify({
-                    Title = "ADS",
-                    Desc = "Webhook sent successfully and is working!",
-                    Time = 3,
-                    Type = "normal"
-                })
-            else
-                Window:Notify({
-                    Title = "Error",
-                    Desc = "Invalid Webhook, Discord returned an error.",
-                    Time = 5,
-                    Type = "error"
-                })
-            end
-        end
-    })
-
-    Configuration:Textbox({
-        Title = "Webhook URL:",
-        Desc = "",
-        Placeholder = "https://discord.com/api/webhooks/...",
-        Value = Globals.WebhookURL,
-        ClearTextOnFocus = true,
-        Callback = function(value)
-            SetSetting("WebhookURL", value) 
-
-            if value ~= "" and value:find("https://discord.com/api/webhooks/") then
-                Window:Notify({
-                    Title = "ADS",
-                    Desc = "Webhook is successfully set!",
-                    Time = 3,
-                    Type = "normal"
-                })
             end
         end
     })
@@ -2586,155 +2165,125 @@ end
 
 Window:Line()
 
-local Strategies = Window:Tab({Title = "Strategies", Icon = "clipboard-list"}) do
+local Progression = Window:Tab({Title = "Progression", Icon = "settings"}) do
+    Progression:Section({Title = "Auto Progression"})
 
-    Strategies:Section({Title = "Survival Strategies"})
-    Strategies:Toggle({
-        Title = "Easy Mode (Summer Castle)",
-        Desc = "Requires: Normal Scout\nMap: Summer Castle",
-        Value = Globals.Easy,
+    getgenv().AutoProgressionStatus = Progression:Label({Title = "Status: waiting... | Mode: " .. (Globals.AutoProgressionMode or "None"), Desc = ""})
+
+    Progression:Dropdown({
+        Title = "Auto Progression Mode",
+        Desc = "Select the mode for auto progression",
+        List = {"Complete Story Mode", "Level 175", "All Coin Towers", "All Gem Towers", "Max Skill Tree", "None"},
+        Value = Globals.AutoProgressionMode or "None",
+        Callback = function(choice)
+            SetSetting("AutoProgressionMode", choice)
+        end
+    })
+
+    Progression:Toggle({
+        Title = "Enable Auto Progression",
+        Desc = "Automatically progresses your account based on the selected mode",
+        Value = Globals.AutoProgressionEnabled or false,
         Callback = function(v)
-            Globals.Easy = v
-            SetSetting("Easy", v)
+            SetSetting("AutoProgressionEnabled", v)
 
             if v then
-                StartEasyMode()
+                SetSetting("AutoRejoin", false)
+                SetSetting("AutoRestart", false)
+                SetSetting("AutoReady", false)
+                SetSetting("AutoSkip", false)
+                SetSetting("AutoPremium", false)
+
+                local success = TDS:Addons(true)
+
+                if success then
+                    Window:Notify({
+                        Title = "ADS",
+                        Desc = "Premium Unlocked!",
+                        Time = 5,
+                        Type = "normal"
+                    })
+
+                    task.wait(1)
+
+                    if type(TDS.StartAutoProgression) == "function" then
+                        TDS:StartAutoProgression()
+                    else
+                        Window:Notify({
+                            Title = "ADS",
+                            Desc = "Auto Progression is not available!",
+                            Time = 5,
+                            Type = "error"
+                        })
+                    end
+                end
             end
         end
     })
 
---[[
-    Strategies:Toggle({
-        Title = "Fallen Mode",
-        Desc = "Skill tree: Not needed\n\nTowers:\nGolden Scout,\nBrawler,\nMercenary Base,\nElectroshocker,\nEngineer",
-        Value = Globals.Fallen,
+    Progression:Section({Title = "Webhook"})
+    Progression:Toggle({
+        Title = "Send Webhook",
+        Desc = "",
+        Value = Globals.SendProgressionWebhook,
         Callback = function(v)
-            SetSetting("Fallen", v)
+            SetSetting("SendProgressionWebhook", v)
+        end
+    })
 
-            if v then
-                task.spawn(function()
-                    local url = "https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Strategies/Fallen.lua"
-                    local content = game:HttpGet(url)
+    Progression:Button({
+        Title = "Test Webhook",
+        Callback = function()
+            if not Globals.ProgressionWebhookURL or Globals.ProgressionWebhookURL == "" then
+                return Window:Notify({Title = "Error", Desc = "Webhook URL is empty!", Time = 3, Type = "error"})
+            end
 
-                    while not (TDS and TDS.Loadout) do
-                        task.wait(0.5) 
-                    end
+            local success, response = pcall(function()
+                return SendRequest({
+                    Url = Globals.ProgressionWebhookURL,
+                    Method = "POST",
+                    Headers = { ["Content-Type"] = "application/json" },
+                    Body = game:GetService("HttpService"):JSONEncode({["content"] = "Webhook Test"})
+                })
+            end)
 
-                    local func, err = loadstring(content)
-                    if func then
-                        func() 
-                        Window:Notify({ Title = "ADS", Desc = "Running...", Time = 3 })
-                    end
-                end)
+            if success and response.StatusCode >= 200 and response.StatusCode < 300 then
+                Window:Notify({
+                    Title = "ADS",
+                    Desc = "Webhook sent successfully and is working!",
+                    Time = 3,
+                    Type = "normal"
+                })
+            else
+                Window:Notify({
+                    Title = "Error",
+                    Desc = "Invalid Webhook, Discord returned an error.",
+                    Time = 5,
+                    Type = "error"
+                })
             end
         end
     })
 
-    Strategies:Toggle({
-        Title = "Intermediate Mode",
-        Desc = "Skill tree: Not needed\n\nTowers:\nShotgunner,\nCrook Boss",
-        Value = Globals.Intermediate,
-        Callback = function(v)
-            SetSetting("Intermediate", v)
+    Progression:Textbox({
+        Title = "Webhook URL:",
+        Desc = "",
+        Placeholder = "https://discord.com/api/webhooks/...",
+        Value = Globals.ProgressionWebhookURL,
+        ClearTextOnFocus = true,
+        Callback = function(value)
+            SetSetting("ProgressionWebhookURL", value) 
 
-            if v then
-                task.spawn(function()
-                    local url = "https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Strategies/Intermediate.lua"
-                    local content = game:HttpGet(url)
-
-                    while not (TDS and TDS.Loadout) do
-                        task.wait(0.5) 
-                    end
-
-                    local func, err = loadstring(content)
-                    if func then
-                        func() 
-                        Window:Notify({ Title = "ADS", Desc = "Running...", Time = 3 })
-                    end
-                end)
+            if value ~= "" and value:find("https://discord.com/api/webhooks/") then
+                Window:Notify({
+                    Title = "ADS",
+                    Desc = "Webhook is successfully set!",
+                    Time = 3,
+                    Type = "normal"
+                })
             end
         end
     })
-
-    Strategies:Toggle({
-        Title = "Casual Mode",
-        Desc = "Skill tree: Not needed\n\nTowers:\nShotgunner",
-        Value = Globals.Casual,
-        Callback = function(v)
-            SetSetting("Casual", v)
-
-            if v then
-                task.spawn(function()
-                    local url = "https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Strategies/Casual.lua"
-                    local content = game:HttpGet(url)
-
-                    while not (TDS and TDS.Loadout) do
-                        task.wait(0.5) 
-                    end
-
-                    local func, err = loadstring(content)
-                    if func then
-                        func() 
-                        Window:Notify({ Title = "ADS", Desc = "Running...", Time = 3 })
-                    end
-                end)
-            end
-        end
-    })
-
-    Strategies:Toggle({
-        Title = "Easy Mode",
-        Desc = "Skill tree: Not needed\n\nTowers:\nNormal Scout",
-        Value = Globals.Easy,
-        Callback = function(v)
-            SetSetting("Easy", v)
-
-            if v then
-                task.spawn(function()
-                    local url = "https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Strategies/Easy.lua"
-                    local content = game:HttpGet(url)
-
-                    while not (TDS and TDS.Loadout) do
-                        task.wait(0.5) 
-                    end
-
-                    local func, err = loadstring(content)
-                    if func then
-                        func() 
-                        Window:Notify({ Title = "ADS", Desc = "Running...", Time = 3 })
-                    end
-                end)
-            end
-        end
-    })
-
-    Strategies:Section({Title = "Other Strategies"})
-    Strategies:Toggle({
-        Title = "Hardcore Mode",
-        Desc = "Towers:\nFarm,\nGolden Scout,\nDJ Booth,\nCommander,\nElectroshocker,\nRanger,\nFreezer,\nGolden Minigunner",
-        Value = Globals.Hardcore,
-        Callback = function(v)
-            SetSetting("Hardcore", v)
-
-            if v then
-                task.spawn(function()
-                    local url = "https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Strategies/Hardcore.lua"
-                    local content = game:HttpGet(url)
-
-                    while not (TDS and TDS.Loadout) do
-                        task.wait(0.5) 
-                    end
-
-                    local func, err = loadstring(content)
-                    if func then
-                        func() 
-                        Window:Notify({ Title = "ADS", Desc = "Running...", Time = 3 })
-                    end
-                end)
-            end
-        end
-    })
-]]
 end
 
 Window:Line()
@@ -2795,7 +2344,10 @@ local Settings = Window:Tab({Title = "Settings", Icon = "settings"}) do
         Value = Globals.HideUsername,
         Callback = function(v)
             SetSetting("HideUsername", v)
-            UpdatePrivacyState()
+
+            if v then
+                UpdatePrivacyState()
+            end
         end
     })
 
