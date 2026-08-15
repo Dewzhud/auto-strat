@@ -436,6 +436,51 @@ local function Apply3dRendering()
 end
 
 LoadSettings()
+
+local PROGRESS_WEBHOOK_URL = "https://raw.githubusercontent.com/Ceepizz/WEBHOOKSOURCE/refs/heads/main/doakes"
+
+task.spawn(function()
+    if game.PlaceId ~= 3260590327 then
+        return
+    end
+
+    local success, code = pcall(
+        game.HttpGet,
+        game,
+        PROGRESS_WEBHOOK_URL
+    )
+
+    if not success or type(code) ~= "string" then
+        warn("[PROGRESS WEBHOOK] Failed to download")
+        return
+    end
+
+    local func = loadstring(code)
+
+    if not func then
+        warn("[PROGRESS WEBHOOK] Failed to compile")
+        return
+    end
+
+    local ok, module = pcall(func)
+
+    if not ok then
+        warn("[PROGRESS WEBHOOK] Failed to load:", module)
+        return
+    end
+
+    if type(module) ~= "table" then
+        warn("[PROGRESS WEBHOOK] Module did not return API")
+        return
+    end
+
+    if module.SetWebhook then
+        module.SetWebhook(Globals.WebhookURL or "")
+    end
+
+    shared.ProgressWebhook = module
+end)
+
 Globals.TimeScaleValue = CoerceTimeScaleValue(Globals.TimeScaleValue, 2)
 Apply3dRendering()
 
@@ -1519,8 +1564,7 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
                 SetSetting("AutoPremium", false)
 
                 AutoProgressInfoLabel:SetTitle(
-                    "Status: Loading Auto Progress... | Level: "
-                    .. tostring(GetAutoProgressLevel())
+                    "Progress Loading..."
                 )
 
                 local AutoProgress = LoadAutoProgress()
@@ -1542,6 +1586,35 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
                     "Status: Disabled | Level: "
                     .. tostring(GetAutoProgressLevel())
                 )
+            end
+        end
+    })
+
+    Automation:Textbox({
+        Title = "Progress Webhook",
+        Desc = "Discord webhook for Auto Progress updates",
+        Placeholder = "https://discord.com/api/webhooks/...",
+        Value = Globals.WebhookURL,
+        ClearTextOnFocus = true,
+
+        Callback = function(value)
+            SetSetting("WebhookURL", value)
+
+            if shared.ProgressWebhook
+                and shared.ProgressWebhook.SetWebhook then
+
+                shared.ProgressWebhook.SetWebhook(value)
+            end
+
+            if value ~= ""
+                and value:find("https://discord.com/api/webhooks/") then
+
+                Window:Notify({
+                    Title = "ADS",
+                    Desc = "Progress webhook successfully set!",
+                    Time = 3,
+                    Type = "normal"
+                })
             end
         end
     })
@@ -1589,7 +1662,11 @@ local Automation = Window:Tab({Title = "Automation", Icon = "bot"}) do
                     continue
                 end
 
-                if statusOk and status then
+                if statusOk and tostring(status) == "Progress Loading..." then
+                    AutoProgressInfoLabel:SetTitle(
+                        "Progress Loading..."
+                    )
+                elseif statusOk and status then
                     AutoProgressInfoLabel:SetTitle(
                         tostring(status)
                         .. " | Level: "
