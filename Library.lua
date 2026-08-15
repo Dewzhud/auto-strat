@@ -440,10 +440,6 @@ LoadSettings()
 local PROGRESS_WEBHOOK_URL = "https://raw.githubusercontent.com/Ceepizz/WEBHOOKSOURCE/refs/heads/main/doakes"
 
 task.spawn(function()
-    if game.PlaceId ~= 3260590327 then
-        return
-    end
-
     local success, code = pcall(
         game.HttpGet,
         game,
