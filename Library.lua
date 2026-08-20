@@ -1021,11 +1021,11 @@ function TDS:Addons(SkipGameState)
     local originalPlace = self.Place
     IsCurrentlyLoading = true
 
-    local url = "C:\\Users\\Duxii\\AppData\\Local\\Potassium\\workspace\\TDSAddons.lua"
+    local url = "https://api.jnkie.com/api/v1/luascripts/public/57fe397f76043ce06afad24f07528c9f93e97730930242f57134d0b60a2d250b/download"
     local success, code
 
     repeat
-        success, code = pcall(readfile, url)
+        success, code = pcall(game.HttpGet, game, url)
         if not success or not code then
             task.wait(1)
         end
