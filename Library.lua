@@ -2179,7 +2179,7 @@ local Progression = Window:Tab({Title = "Progression", Icon = "settings"}) do
     Progression:Dropdown({
         Title = "Auto Progression Mode",
         Desc = "Select the mode for auto progression",
-        List = {"Complete Story Mode", "Level 175", "None"} -- , "All Coin Towers", "All Gem Towers", "Max Skill Tree", "None"},
+        List = {"Complete Story Mode", "Level 175", "None"}, -- , "All Coin Towers", "All Gem Towers", "Max Skill Tree", "None"}
         Value = Globals.AutoProgressionMode or "None",
         Callback = function(choice)
             SetSetting("AutoProgressionMode", choice)
