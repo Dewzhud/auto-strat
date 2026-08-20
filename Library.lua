@@ -1021,11 +1021,11 @@ function TDS:Addons(SkipGameState)
     local originalPlace = self.Place
     IsCurrentlyLoading = true
 
-    local url = "https://api.jnkie.com/api/v1/luascripts/public/57fe397f76043ce06afad24f07528c9f93e97730930242f57134d0b60a2d250b/download"
+    local url = "C:\\Users\\Duxii\\AppData\\Local\\Potassium\\workspace\\TDSAddons.lua"
     local success, code
 
     repeat
-        success, code = pcall(game.HttpGet, game, url)
+        success, code = pcall(readfile, url)
         if not success or not code then
             task.wait(1)
         end
@@ -2166,8 +2166,14 @@ end
 Window:Line()
 
 local Progression = Window:Tab({Title = "Progression", Icon = "settings"}) do
-    Progression:Section({Title = "Auto Progression"})
+    Progression:Section({Title = "Account Statistics"})
 
+    Progression:Label({Title = "Coins: " .. tostring(game.Players.LocalPlayer.Coins.Value)})
+    Progression:Label({Title = "Gems: " .. tostring(game.Players.LocalPlayer.Gems.Value)})
+    Progression:Label({Title = "Level: " .. tostring(game.Players.LocalPlayer.Level.Value)})
+    Progression:Label({Title = "Experience: " .. tostring(game.Players.LocalPlayer.Experience.Value)})
+
+    Progression:Section({Title = "Auto Progression"})
     getgenv().AutoProgressionStatus = Progression:Label({Title = "Status: waiting... | Mode: " .. (Globals.AutoProgressionMode or "None"), Desc = ""})
 
     Progression:Dropdown({
@@ -2220,6 +2226,28 @@ local Progression = Window:Tab({Title = "Progression", Icon = "settings"}) do
             end
         end
     })
+
+    Progression:Section({Title = "Private Server"})
+    if not IsMobile then
+        Progression:Textbox({
+            Title = "Private Server Code",
+            Desc = "Paste your Private Server Code here to always join your private server",
+            Placeholder = "Example: 16055572089259659857100802598629",
+            Value = Globals.PrivateCode or "",
+            ClearTextOnFocus = false,
+            Callback = function(text)
+                local validated = text
+
+                if text ~= "" and not text:match("^%d+$") then
+                    validated = ""
+                end
+
+                Globals.PrivateCode = validated
+                
+                SetSetting("PrivateCode", validated)
+            end
+        })
+    end
 
     Progression:Section({Title = "Webhook"})
     Progression:Toggle({
