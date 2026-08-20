@@ -1,0 +1,91 @@
+TDS:Place("Assassin", -5.984, 1, -23.07, true)
+TDS:Place("Assassin", -5.984, 1, -23.07, true)
+
+TDS:Place("Assassin", -5.984, 1, -23.07, true)
+
+TDS:Place("Assassin", -5.984, 1, -23.07, true)
+TDS:Place("Assassin", -5.984, 1, -23.07, true)
+
+TDS:Upgrade(1)
+TDS:Upgrade(3)
+TDS:Upgrade(2)
+
+TDS:Upgrade(5)
+TDS:Upgrade(4)
+
+TDS:Upgrade(2)
+TDS:Upgrade(1)
+
+TDS:Upgrade(3)
+TDS:Upgrade(5)
+
+TDS:Upgrade(4)
+
+TDS:Upgrade(2)
+
+TDS:Upgrade(1)
+
+TDS:Upgrade(3)
+
+TDS:Upgrade(5)
+TDS:Upgrade(4)
+
+TDS:VoteSkip()
+TDS:Upgrade(2)
+
+TDS:Upgrade(1)
+
+TDS:Upgrade(3)
+
+TDS:Upgrade(4)
+
+TDS:Upgrade(5)
+TDS:Place("Sniper", -12.081, 4.002, -13.128, true)
+TDS:Upgrade(6)
+TDS:Upgrade(6)
+TDS:Place("Sniper", -12.081, 4.002, -13.128, true)
+TDS:Upgrade(7)
+TDS:Upgrade(7)
+TDS:Place("Sniper", -12.081, 4.002, -13.128, true)
+
+TDS:Upgrade(8)
+TDS:Upgrade(8)
+TDS:Place("Sniper", -12.081, 4.002, -13.128, true)
+TDS:Upgrade(9)
+TDS:Upgrade(9)
+TDS:Upgrade(6)
+TDS:Upgrade(7)
+TDS:Upgrade(7)
+TDS:Upgrade(8)
+TDS:Upgrade(8)
+TDS:Upgrade(6)
+TDS:Upgrade(9)
+TDS:Upgrade(9)
+TDS:Place("Sniper", -12.081, 4.002, -13.128, true)
+TDS:Upgrade(10)
+TDS:Upgrade(10)
+TDS:Sell(4)
+TDS:Sell(5)
+TDS:Sell(1)
+TDS:Sell(3)
+TDS:Sell(2)
+TDS:Place("Sniper", -12.081, 4.002, -13.128, true)
+TDS:Upgrade(11)
+TDS:Upgrade(11)
+TDS:Upgrade(11)
+TDS:Upgrade(11)
+TDS:Place("Sniper", -12.081, 4.002, -13.128, true)
+TDS:Upgrade(12)
+TDS:Upgrade(12)
+TDS:Upgrade(12)
+TDS:Upgrade(12)
+TDS:Place("Sniper", -12.081, 4.002, -13.128, true)
+TDS:Upgrade(13)
+TDS:Upgrade(13)
+TDS:Upgrade(13)
+TDS:Place("Sniper", -12.081, 4.002, -13.128, true)
+TDS:Upgrade(13)
+TDS:Upgrade(14)
+TDS:Upgrade(14)
+TDS:Upgrade(14)
+TDS:Upgrade(14)
