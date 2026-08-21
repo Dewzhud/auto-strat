@@ -5,7 +5,7 @@ return function(ctx)
         return
     end
 
-	local Window = ctx.Window
+    local Window = ctx.Window
     local replicated_storage = ctx.ReplicatedStorage or game:GetService("ReplicatedStorage")
     local http_service = ctx.HttpService or game:GetService("HttpService")
     local game_state = ctx.GameState or "UNKNOWN"
@@ -22,19 +22,374 @@ return function(ctx)
     local Recorder
     local has_hook = type(hookmetamethod) == "function"
     
+    -- ============================================
+    -- MULTI-MAP VARIABLES
+    -- ============================================
+    local current_map = "Unknown"
+    local map_actions = {}
+    local is_recording_map = false
+    local current_map_started = false
+    local map_headers = {}
+    local current_towers = {"None", "None", "None", "None", "None"}
+    local current_modifiers = ""
+    local current_mode = "Unknown"
+    local skip_game_info = false
+    
+    -- ============================================
+    -- GET CURRENT MAP NAME
+    -- ============================================
+    local function GetCurrentMapName()
+        local state_folder = replicated_storage:FindFirstChild("State")
+        if state_folder then
+            local map = state_folder:GetAttribute("Map")
+            if map and map ~= "" and map ~= "Unknown" then
+                return map
+            end
+        end
+        
+        local state_replicators = replicated_storage:FindFirstChild("StateReplicators")
+        if state_replicators then
+            local game_state = state_replicators:FindFirstChild("GameStateReplicator")
+            if game_state then
+                local map = game_state:GetAttribute("Map")
+                if map and map ~= "" then
+                    return map
+                end
+            end
+        end
+        return "Unknown"
+    end
+    
+    -- ============================================
+    -- GET CURRENT MODE
+    -- ============================================
+    local function GetCurrentMode()
+        local state_folder = replicated_storage:FindFirstChild("State")
+        if not state_folder then
+            return "Unknown"
+        end
+        
+        local mode = state_folder.Difficulty.Value or "Unknown"
+        local mode_obj = state_folder:FindFirstChild("Mode")
+        
+        if mode_obj then
+            if mode_obj.Value == "Hardcore" then
+                if mode == "Hard" then
+                    return "Voidcore"
+                else
+                    return "Hardcore"
+                end
+            elseif mode_obj.Value == "DuckEvent" then
+                if mode == "Easy" then
+                    return "DuckyEasy"
+                elseif mode == "Hard" then
+                    return "DuckyHard"
+                end
+            elseif mode_obj.Value == "Special" or mode_obj.Value == "DuckEvent" then
+                skip_game_info = true
+            end
+        end
+        
+        if mode == "Trial" then
+            skip_game_info = true
+        end
+        
+        return mode
+    end
+    
+    -- ============================================
+    -- GET EQUIPPED TOWERS
+    -- ============================================
+    local function GetEquippedTowers()
+        local towers = {"None", "None", "None", "None", "None"}
+        local state_replicators = replicated_storage:FindFirstChild("StateReplicators")
+        
+        if state_replicators then
+            for _, folder in ipairs(state_replicators:GetChildren()) do
+                if folder.Name == "PlayerReplicator" and folder:GetAttribute("UserId") == local_player.UserId then
+                    local equipped = folder:GetAttribute("EquippedTowers")
+                    if type(equipped) == "string" then
+                        local cleaned_json = equipped:match("%[.*%]") 
+                        
+                        local success, tower_table = pcall(function()
+                            return http_service:JSONDecode(cleaned_json)
+                        end)
+                        
+                        if success and type(tower_table) == "table" then
+                            towers[1] = tower_table[1] or "None"
+                            towers[2] = tower_table[2] or "None"
+                            towers[3] = tower_table[3] or "None"
+                            towers[4] = tower_table[4] or "None"
+                            towers[5] = tower_table[5] or "None"
+                        end
+                    end
+                end
+            end
+        end
+        return towers
+    end
+    
+    -- ============================================
+    -- GET MODIFIERS
+    -- ============================================
+    local function GetModifiers()
+        local mods = {}
+        local state_replicators = replicated_storage:FindFirstChild("StateReplicators")
+        
+        if state_replicators then
+            for _, folder in ipairs(state_replicators:GetChildren()) do
+                if folder.Name == "ModifierReplicator" then
+                    local raw_votes = folder:GetAttribute("Votes")
+                    if type(raw_votes) == "string" then
+                        local cleaned_json = raw_votes:match("{.*}") 
+                        
+                        local success, mod_table = pcall(function()
+                            return http_service:JSONDecode(cleaned_json)
+                        end)
+                        
+                        if success and type(mod_table) == "table" then
+                            for mod_name, _ in pairs(mod_table) do
+                                table.insert(mods, mod_name .. " = true")
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return table.concat(mods, ", ")
+    end
+    
+    -- ============================================
+    -- GET WAVE PREFIX
+    -- ============================================
     local function get_wave_prefix()
-        local success, current_wave = pcall(function() return replicated_storage.StateReplicators.GameStateReplicator:GetAttribute("Wave") end)
-        if success and current_wave > last_wave then
+        local success, current_wave = pcall(function() 
+            return replicated_storage.StateReplicators.GameStateReplicator:GetAttribute("Wave") 
+        end)
+        if success and current_wave and current_wave > last_wave then
             last_wave = current_wave
             return "\n-- [ Wave " .. current_wave .. " ] --\n"
         end
         return ""
     end
 
+    -- ============================================
+    -- RECORD ACTION WITH MAP CONTEXT
+    -- ============================================
     local function record_action(command_str)
         if not Globals.record_strat then return end
+        
+        -- Record to current map's actions
+        if current_map ~= "Unknown" then
+            if not map_actions[current_map] then
+                map_actions[current_map] = {}
+            end
+            table.insert(map_actions[current_map], get_wave_prefix() .. command_str)
+        end
+        
+        -- Also append to Strat.txt for compatibility
         if appendfile then
             appendfile("Strat.txt", get_wave_prefix() .. command_str .. "\n")
+        end
+    end
+
+    -- ============================================
+    -- SAVE MULTI-MAP STRATEGY
+    -- ============================================
+    local function SaveMultiMapStrategy()
+        if not writefile then
+            if Recorder then
+                Recorder:Log("⚠️ writefile not available, cannot save multi-map strategy")
+            end
+            return
+        end
+        
+        local content = "local TDS = loadstring(game:HttpGet(\"https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua\"))()\n\n"
+        content = content .. "-- ============================================\n"
+        content = content .. "-- MULTI-MAP STRATEGY FILE\n"
+        content = content .. "-- Generated at: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n"
+        content = content .. "-- Maps recorded: " .. table.concat(table.keys(map_actions), ", ") .. "\n"
+        content = content .. "-- ============================================\n\n"
+        
+        content = content .. "-- Map-specific actions\n\n"
+        content = content .. "local MapActions = {\n"
+        
+        local has_actions = false
+        for map_name, actions in pairs(map_actions) do
+            if #actions > 0 then
+                has_actions = true
+                content = content .. string.format('    ["%s"] = {\n', map_name)
+                for _, action in ipairs(actions) do
+                    content = content .. "        " .. action .. ",\n"
+                end
+                content = content .. "    },\n"
+            end
+        end
+        
+        content = content .. "}\n\n"
+        
+        if has_actions then
+            content = content .. [=[
+-- ============================================
+-- AUTO-EXECUTION LOGIC
+-- ============================================
+local function ExecuteCurrentMapStrategy()
+    print("=== Executing Multi-Map Strategy ===")
+    local stateReplicators = game:GetService("ReplicatedStorage"):FindFirstChild("StateReplicators")
+    if not stateReplicators then 
+        print("No StateReplicators found")
+        return 
+    end
+    
+    local gameState = stateReplicators:FindFirstChild("GameStateReplicator")
+    if not gameState then 
+        print("No GameStateReplicator found")
+        return 
+    end
+    
+    local currentMap = gameState:GetAttribute("Map") or "Unknown"
+    print("Current map detected: " .. currentMap)
+    local actions = MapActions[currentMap]
+    
+    if actions and #actions > 0 then
+        print("Executing strategy for map: " .. currentMap .. " (" .. #actions .. " actions)")
+        for i, action in ipairs(actions) do
+            print("  [" .. i .. "] " .. action)
+            local func = loadstring("return " .. action)()
+            if func then
+                pcall(func)
+            end
+        end
+        print("Strategy execution complete for: " .. currentMap)
+    else
+        print("No strategy found for map: " .. currentMap)
+        if next(MapActions) then
+            print("Available maps: " .. table.concat(table.keys(MapActions), ", "))
+        end
+    end
+end
+
+-- Execute when game starts or map changes
+local function SetupMapListener()
+    local stateReplicators = game:GetService("ReplicatedStorage"):FindFirstChild("StateReplicators")
+    if not stateReplicators then 
+        print("No StateReplicators found")
+        return 
+    end
+    
+    local gameState = stateReplicators:FindFirstChild("GameStateReplicator")
+    if gameState then
+        gameState:GetAttributeChangedSignal("Map"):Connect(function()
+            print("Map changed, executing strategy...")
+            ExecuteCurrentMapStrategy()
+        end)
+        task.wait(2)
+        print("Initial map execution...")
+        ExecuteCurrentMapStrategy()
+    else
+        print("GameStateReplicator not found")
+    end
+end
+
+print("Setting up multi-map strategy listener...")
+task.spawn(SetupMapListener)
+]=]
+            
+            writefile("Strat_MultiMap.lua", content)
+            
+            if Recorder then
+                Recorder:Log("✅ Multi-map strategy saved to Strat_MultiMap.lua")
+                Recorder:Log("📊 Maps recorded: " .. table.concat(table.keys(map_actions), ", "))
+            end
+            if Window then
+                Window:Notify({
+                    Title = "✅ Multi-Map Strategy Saved",
+                    Desc = "Saved " .. #map_actions .. " map(s) to Strat_MultiMap.lua",
+                    Time = 5,
+                    Type = "normal"
+                })
+            end
+        else
+            if Recorder then
+                Recorder:Log("⚠️ No actions recorded yet!")
+            end
+        end
+    end
+
+    -- ============================================
+    -- GET MAP HEADER
+    -- ============================================
+    local function GetMapHeader()
+        local towers = GetEquippedTowers()
+        local mode = GetCurrentMode()
+        local modifiers = GetModifiers()
+        
+        local header = string.format([[
+-- ============================================
+-- MAP: %s
+-- Mode: %s
+-- Towers: %s, %s, %s, %s, %s
+-- Modifiers: %s
+-- ============================================
+
+]], current_map, mode, towers[1], towers[2], towers[3], towers[4], towers[5], modifiers)
+        
+        return header
+    end
+
+    -- ============================================
+    -- START NEW MAP RECORDING
+    -- ============================================
+    local function StartNewMapRecording()
+        local new_map = GetCurrentMapName()
+        if new_map == "Unknown" then
+            return
+        end
+        
+        if new_map ~= current_map then
+            current_map = new_map
+            current_map_started = false
+            
+            -- Get fresh data for the new map
+            current_towers = GetEquippedTowers()
+            current_mode = GetCurrentMode()
+            current_modifiers = GetModifiers()
+            
+            if Recorder then
+                Recorder:Log("📝 New map detected: " .. current_map)
+                Recorder:Log("  Mode: " .. current_mode)
+                Recorder:Log("  Towers: " .. table.concat(current_towers, ", "))
+            end
+        end
+        
+        if not current_map_started then
+            current_map_started = true
+            
+            -- Initialize map actions
+            if not map_actions[current_map] then
+                map_actions[current_map] = {}
+            end
+            
+            -- Add map header to actions
+            local header = GetMapHeader()
+            table.insert(map_actions[current_map], header)
+            
+            -- Also append to Strat.txt
+            if appendfile then
+                appendfile("Strat.txt", header)
+            end
+            
+            if Recorder then
+                Recorder:Log("✅ Recording started for map: " .. current_map)
+            end
+            if Window then
+                Window:Notify({
+                    Title = "🎯 Map Detected",
+                    Desc = "Recording for: " .. current_map,
+                    Time = 3,
+                    Type = "normal"
+                })
+            end
         end
     end
 
@@ -665,8 +1020,8 @@ return function(ctx)
         })
 
         RecorderTab:Button({
-            Title = "START",
-            Desc = "",
+            Title = "START RECORDING",
+            Desc = "Start recording for the current map",
             Callback = function()
                 Recorder:Clear()
 
@@ -700,111 +1055,49 @@ return function(ctx)
                     end
                 end
 
-                Recorder:Log("Recorder started")
-
-                local current_mode = "Unknown"
-                local current_map = "Unknown"
-                local skip_game_info = false
+                Recorder:Log("✅ Recorder started - Multi-Map Mode")
+                Recorder:Log("📝 Recording will auto-detect maps")
                 
-                local state_folder = replicated_storage:FindFirstChild("State")
-                if state_folder then
-                    current_mode = state_folder.Difficulty.Value
-                    current_map = state_folder.Map.Value
-                    local mode_obj = state_folder:FindFirstChild("Mode")
-                    if mode_obj then
-                        if mode_obj.Value == "Hardcore" then
-                            if current_mode == "Hard" then
-                                current_mode = "Voidcore"
-                            else
-                                current_mode = "Hardcore"
-                            end
-                        elseif mode_obj.Value == "DuckEvent" then
-                            if current_mode == "Easy" then
-                                current_mode = "DuckyEasy"
-                            elseif current_mode == "Hard" then
-                                current_mode = "DuckyHard"
-                            end
-                        end
-                    end
-                    if current_mode == "Trial" or (mode_obj and (mode_obj.Value == "Special" or mode_obj.Value == "DuckEvent")) then
-                        skip_game_info = true
-                    end
+                -- Get current map info
+                current_map = GetCurrentMapName()
+                current_mode = GetCurrentMode()
+                current_towers = GetEquippedTowers()
+                current_modifiers = GetModifiers()
+                
+                if current_map ~= "Unknown" then
+                    Recorder:Log("🎯 Current map: " .. current_map)
+                    Recorder:Log("  Mode: " .. current_mode)
+                    Recorder:Log("  Towers: " .. table.concat(current_towers, ", "))
+                    
+                    -- Start recording for current map
+                    StartNewMapRecording()
+                else
+                    Recorder:Log("⏳ Waiting for map detection...")
                 end
-
-                local tower1, tower2, tower3, tower4, tower5 = "None", "None", "None", "None", "None"
-                local current_modifiers = "" 
+                
+                -- Setup map change detection
                 local state_replicators = replicated_storage:FindFirstChild("StateReplicators")
-
                 if state_replicators then
-                    for _, folder in ipairs(state_replicators:GetChildren()) do
-                        if folder.Name == "PlayerReplicator" and folder:GetAttribute("UserId") == local_player.UserId then
-                            local equipped = folder:GetAttribute("EquippedTowers")
-                            if type(equipped) == "string" then
-                                local cleaned_json = equipped:match("%[.*%]") 
-                                
-                                local success, tower_table = pcall(function()
-                                    return http_service:JSONDecode(cleaned_json)
-                                end)
-
-                                if success and type(tower_table) == "table" then
-                                    tower1 = tower_table[1] or "None"
-                                    tower2 = tower_table[2] or "None"
-                                    tower3 = tower_table[3] or "None"
-                                    tower4 = tower_table[4] or "None"
-                                    tower5 = tower_table[5] or "None"
-                                end
+                    local game_state_replicator = state_replicators:FindFirstChild("GameStateReplicator")
+                    if game_state_replicator then
+                        game_state_replicator:GetAttributeChangedSignal("Map"):Connect(function()
+                            local new_map = game_state_replicator:GetAttribute("Map")
+                            if new_map and new_map ~= "" and new_map ~= current_map then
+                                Recorder:Log("🔄 Map changed to: " .. new_map)
+                                current_map = new_map
+                                StartNewMapRecording()
                             end
-                        end
-
-                        if folder.Name == "ModifierReplicator" then
-                            local raw_votes = folder:GetAttribute("Votes")
-                            if type(raw_votes) == "string" then
-                                local cleaned_json = raw_votes:match("{.*}") 
-                                
-                                local success, mod_table = pcall(function()
-                                    return http_service:JSONDecode(cleaned_json)
-                                end)
-
-                                if success and type(mod_table) == "table" then
-                                    local mods = {}
-                                    for mod_name, _ in pairs(mod_table) do
-                                        table.insert(mods, mod_name .. " = true")
-                                    end
-                                    current_modifiers = table.concat(mods, ", ")
-                                end
-                            end
-                        end
+                        end)
                     end
                 end
-
-                Recorder:Log("Mode: " .. current_mode)
-                Recorder:Log("Map: " .. current_map)
-                Recorder:Log("Towers: " .. tower1 .. ", " .. tower2)
-                Recorder:Log(tower3 .. ", " .. tower4 .. ", " .. tower5)
 
                 sync_existing_towers()
                 last_wave = 0
                 Globals.record_strat = true
 
-                if writefile then
-                    local game_info_str = ""
-                    if not skip_game_info then
-                        game_info_str = string.format('\nTDS:GameInfo("%s", {%s})', current_map, current_modifiers)
-                    end
-                    local config_header = string.format([[
-local TDS = loadstring(game:HttpGet("https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua"))()
-
-TDS:Loadout("%s", "%s", "%s", "%s", "%s")
-TDS:Mode("%s")%s
-
-]], tower1, tower2, tower3, tower4, tower5, current_mode, game_info_str)
-
-                    writefile("Strat.txt", config_header)
-                end
-
                 Window:Notify({
-                    Title = "ADS",
-                    Desc = "Recorder has started, you may place down your towers now.",
+                    Title = "🎥 Recorder Started",
+                    Desc = "Recording for map: " .. current_map,
                     Time = 3,
                     Type = "normal"
                 })
@@ -812,16 +1105,79 @@ TDS:Mode("%s")%s
         })
 
         RecorderTab:Button({
-            Title = "STOP",
-            Desc = "",
+            Title = "STOP & SAVE",
+            Desc = "Stop recording and save multi-map strategy",
             Callback = function()
                 Globals.record_strat = false
-                if has_hook then
+                
+                if #map_actions > 0 then
+                    SaveMultiMapStrategy()
                     Recorder:Clear()
-                    Recorder:Log("Strategy saved, you may find it in \nyour workspace folder called 'Strat.txt'")
+                    Recorder:Log("✅ Recording stopped and saved!")
+                    Recorder:Log("📊 Maps recorded: " .. table.concat(table.keys(map_actions), ", "))
+                    Recorder:Log("📁 Saved as: Strat_MultiMap.lua")
+                    Recorder:Log("📄 Also saved individual Strat.txt")
+                    
                     Window:Notify({
-                        Title = "ADS",
-                        Desc = "Recording has been saved! Check your workspace folder for Strat.txt",
+                        Title = "✅ Strategy Saved",
+                        Desc = "Multi-map strategy saved to Strat_MultiMap.lua",
+                        Time = 3,
+                        Type = "normal"
+                    })
+                else
+                    Recorder:Log("⚠️ No actions recorded!")
+                    Window:Notify({
+                        Title = "⚠️ No Actions",
+                        Desc = "No actions recorded. Play a match first!",
+                        Time = 3,
+                        Type = "error"
+                    })
+                end
+            end
+        })
+
+        RecorderTab:Button({
+            Title = "SAVE CURRENT MAP ONLY",
+            Desc = "Save only the current map's strategy",
+            Callback = function()
+                if not current_map or current_map == "Unknown" then
+                    Recorder:Log("⚠️ No map detected!")
+                    Window:Notify({
+                        Title = "⚠️ No Map",
+                        Desc = "Join a match first!",
+                        Time = 3,
+                        Type = "error"
+                    })
+                    return
+                end
+                
+                if not map_actions[current_map] or #map_actions[current_map] == 0 then
+                    Recorder:Log("⚠️ No actions for map: " .. current_map)
+                    Window:Notify({
+                        Title = "⚠️ No Actions",
+                        Desc = "No actions recorded for " .. current_map,
+                        Time = 3,
+                        Type = "error"
+                    })
+                    return
+                end
+                
+                if writefile then
+                    local content = "local TDS = loadstring(game:HttpGet(\"https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua\"))()\n\n"
+                    content = content .. GetMapHeader()
+                    content = content .. "\n-- Actions\n"
+                    
+                    for _, action in ipairs(map_actions[current_map]) do
+                        if not action:match("^--") then
+                            content = content .. action .. "\n"
+                        end
+                    end
+                    
+                    writefile("Strat_" .. current_map .. ".lua", content)
+                    Recorder:Log("✅ Saved strategy for: " .. current_map)
+                    Window:Notify({
+                        Title = "✅ Saved",
+                        Desc = "Saved strategy for: " .. current_map,
                         Time = 3,
                         Type = "normal"
                     })
@@ -829,6 +1185,28 @@ TDS:Mode("%s")%s
             end
         })
 
+        RecorderTab:Button({
+            Title = "CLEAR ALL RECORDINGS",
+            Desc = "Clear all recorded map actions",
+            Callback = function()
+                table.clear(map_actions)
+                table.clear(spawned_towers)
+                tower_count = 0
+                current_map_started = false
+                Recorder:Clear()
+                Recorder:Log("🗑️ All recordings cleared!")
+                Window:Notify({
+                    Title = "🗑️ Cleared",
+                    Desc = "All recorded actions cleared",
+                    Time = 3,
+                    Type = "normal"
+                })
+            end
+        })
+
+        -- ============================================
+        -- TOWER PLACEMENT TRACKING
+        -- ============================================
         if game_state == "GAME" then
             local towers_folder = workspace_ref:WaitForChild("Towers", 5)
 
@@ -865,7 +1243,7 @@ TDS:Mode("%s")%s
                     command = 'TDS:Place("' .. tower_name .. '", ' .. tostring(pos_x) .. ', ' .. tostring(pos_y) .. ', ' .. tostring(pos_z) .. ')'
                 end
                 record_action(command)
-                Recorder:Log("Placed " .. tower_name .. " (Index: " .. my_index .. ")")
+                Recorder:Log("📌 Placed " .. tower_name .. " (Index: " .. my_index .. ") on " .. current_map)
 
             end)
 
@@ -875,11 +1253,42 @@ TDS:Mode("%s")%s
                 local my_index = spawned_towers[tower]
                 if my_index then
                     record_action(string.format('TDS:Sell(%d)', my_index))
-                    Recorder:Log("Sold Tower " .. my_index)
+                    Recorder:Log("💀 Sold Tower " .. my_index)
                     
                     spawned_towers[tower] = nil
                 end
             end)
         end
+        
+        -- ============================================
+        -- STATUS DISPLAY
+        -- ============================================
+        RecorderTab:Section({Title = "Status"})
+        
+        local MapLabel = RecorderTab:Label({Title = "Current Map: " .. current_map, Desc = ""})
+        local MapCountLabel = RecorderTab:Label({Title = "Maps Recorded: 0", Desc = ""})
+        local ActionsLabel = RecorderTab:Label({Title = "Total Actions: 0", Desc = ""})
+        
+        -- Update status periodically
+        task.spawn(function()
+            while true do
+                task.wait(2)
+                if MapLabel then
+                    MapLabel:SetTitle("Current Map: " .. current_map)
+                end
+                if MapCountLabel then
+                    local count = 0
+                    for _ in pairs(map_actions) do count = count + 1 end
+                    MapCountLabel:SetTitle("Maps Recorded: " .. count)
+                end
+                if ActionsLabel then
+                    local total = 0
+                    for _, actions in pairs(map_actions) do
+                        total = total + #actions
+                    end
+                    ActionsLabel:SetTitle("Total Actions: " .. total)
+                end
+            end
+        end)
     end
 end
