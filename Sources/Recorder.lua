@@ -658,6 +658,74 @@ return function(ctx)
         end
     end
 
+    -- Serializes a value into a Lua literal string, indented at the given depth.
+    local function serialize_config_value(v, depth)
+        depth = depth or 0
+        local indent = string.rep("    ", depth)
+        local inner  = string.rep("    ", depth + 1)
+        local t = type(v)
+
+        if t == "string" then
+            return string.format("%q", v)
+        elseif t == "number" then
+            return num_to_str(v)
+        elseif t == "boolean" then
+            return tostring(v)
+        elseif t == "table" then
+            -- Check if it's an array
+            local is_arr, max_idx = is_array(v)
+            local parts = {}
+            if is_arr then
+                for i = 1, max_idx do
+                    table.insert(parts, inner .. serialize_config_value(v[i], depth + 1))
+                end
+            else
+                local keys = {}
+                for k in pairs(v) do table.insert(keys, k) end
+                table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+                for _, k in ipairs(keys) do
+                    local key_str = (type(k) == "string" and k:match("^[_%a][_%w]*$"))
+                        and k
+                        or ("[" .. string.format("%q", tostring(k)) .. "]")
+                    table.insert(parts, inner .. key_str .. " = " .. serialize_config_value(v[k], depth + 1))
+                end
+            end
+            if #parts == 0 then
+                return "{}"
+            end
+            return "{\n" .. table.concat(parts, ",\n") .. "\n" .. indent .. "}"
+        end
+        return "nil"
+    end
+
+    -- Builds the Config = { ... } block from a flat key->value table,
+    -- with each top-level field on its own indented line.
+    local function build_config_block(cfg)
+        local lines = {}
+        -- Fixed ordering for the well-known keys, then any extras
+        local ordered_keys = { "Map", "Mode", "Loadout", "Modifiers" }
+        local seen = {}
+        for _, k in ipairs(ordered_keys) do
+            if cfg[k] ~= nil then
+                seen[k] = true
+                table.insert(lines, "    " .. k .. " = " .. serialize_config_value(cfg[k], 1))
+            end
+        end
+        -- Append any extra map keys not in the fixed list
+        local extra_keys = {}
+        for k in pairs(cfg) do
+            if not seen[k] then table.insert(extra_keys, k) end
+        end
+        table.sort(extra_keys)
+        for _, k in ipairs(extra_keys) do
+            local key_str = (type(k) == "string" and k:match("^[_%a][_%w]*$"))
+                and k
+                or ("[" .. string.format("%q", tostring(k)) .. "]")
+            table.insert(lines, "    " .. key_str .. " = " .. serialize_config_value(cfg[k], 1))
+        end
+        return "local Config = {\n" .. table.concat(lines, ",\n") .. "\n}\n"
+    end
+
     local RecorderTab = Window:Tab({Title = "Recorder", Icon = "camera"}) do
         Recorder = RecorderTab:CreateLogger({
             Title = "RECORDER:",
@@ -702,22 +770,21 @@ return function(ctx)
 
                 Recorder:Log("Recorder started")
 
-                local current_mode = "Unknown"
-                local current_map = "Unknown"
-                local skip_game_info = false
-                
+                -- ── Gather game metadata ──────────────────────────────────────────
+
+                local current_mode      = "Unknown"
+                local current_map       = "Unknown"
+                local skip_game_info    = false
+                local raw_mod_table     = {}   -- { [ModName] = true, ... }
+
                 local state_folder = replicated_storage:FindFirstChild("State")
                 if state_folder then
                     current_mode = state_folder.Difficulty.Value
-                    current_map = state_folder.Map.Value
+                    current_map  = state_folder.Map.Value
                     local mode_obj = state_folder:FindFirstChild("Mode")
                     if mode_obj then
                         if mode_obj.Value == "Hardcore" then
-                            if current_mode == "Hard" then
-                                current_mode = "Voidcore"
-                            else
-                                current_mode = "Hardcore"
-                            end
+                            current_mode = (current_mode == "Hard") and "Voidcore" or "Hardcore"
                         elseif mode_obj.Value == "DuckEvent" then
                             if current_mode == "Easy" then
                                 current_mode = "DuckyEasy"
@@ -732,74 +799,145 @@ return function(ctx)
                 end
 
                 local tower1, tower2, tower3, tower4, tower5 = "None", "None", "None", "None", "None"
-                local current_modifiers = "" 
                 local state_replicators = replicated_storage:FindFirstChild("StateReplicators")
 
+                -- Extra map attributes we want to forward to the loader
+                local extra_map_data = {}
+
                 if state_replicators then
+                    -- Player loadout
                     for _, folder in ipairs(state_replicators:GetChildren()) do
-                        if folder.Name == "PlayerReplicator" and folder:GetAttribute("UserId") == local_player.UserId then
+                        if folder.Name == "PlayerReplicator"
+                            and folder:GetAttribute("UserId") == local_player.UserId
+                        then
                             local equipped = folder:GetAttribute("EquippedTowers")
                             if type(equipped) == "string" then
-                                local cleaned_json = equipped:match("%[.*%]") 
-                                
-                                local success, tower_table = pcall(function()
-                                    return http_service:JSONDecode(cleaned_json)
+                                local cleaned = equipped:match("%[.*%]")
+                                local ok, tbl = pcall(function()
+                                    return http_service:JSONDecode(cleaned)
                                 end)
-
-                                if success and type(tower_table) == "table" then
-                                    tower1 = tower_table[1] or "None"
-                                    tower2 = tower_table[2] or "None"
-                                    tower3 = tower_table[3] or "None"
-                                    tower4 = tower_table[4] or "None"
-                                    tower5 = tower_table[5] or "None"
+                                if ok and type(tbl) == "table" then
+                                    tower1 = tbl[1] or "None"
+                                    tower2 = tbl[2] or "None"
+                                    tower3 = tbl[3] or "None"
+                                    tower4 = tbl[4] or "None"
+                                    tower5 = tbl[5] or "None"
                                 end
                             end
                         end
 
+                        -- Active modifiers (kept as a real table now)
                         if folder.Name == "ModifierReplicator" then
                             local raw_votes = folder:GetAttribute("Votes")
                             if type(raw_votes) == "string" then
-                                local cleaned_json = raw_votes:match("{.*}") 
-                                
-                                local success, mod_table = pcall(function()
-                                    return http_service:JSONDecode(cleaned_json)
+                                local cleaned = raw_votes:match("{.*}")
+                                local ok, tbl = pcall(function()
+                                    return http_service:JSONDecode(cleaned)
                                 end)
-
-                                if success and type(mod_table) == "table" then
-                                    local mods = {}
-                                    for mod_name, _ in pairs(mod_table) do
-                                        table.insert(mods, mod_name .. " = true")
+                                if ok and type(tbl) == "table" then
+                                    for mod_name, _ in pairs(tbl) do
+                                        raw_mod_table[mod_name] = true
                                     end
-                                    current_modifiers = table.concat(mods, ", ")
                                 end
+                            end
+                        end
+                    end
+
+                    -- Extra attributes from GameStateReplicator
+                    local gsr = state_replicators:FindFirstChild("GameStateReplicator")
+                    if gsr then
+                        -- Extend this list with any attribute names the game exposes
+                        local wanted_attrs = {
+                            "MaxWaves",
+                            "TotalEnemies",
+                            "EnemyMultiplier",
+                            "HealthMultiplier",
+                            "SpeedMultiplier",
+                            "RewardMultiplier",
+                            "MapSeed",
+                            "PlayerCount",
+                            "TimeLimit",
+                            "Difficulty",
+                            "SubMode",
+                            "Event",
+                        }
+                        for _, attr in ipairs(wanted_attrs) do
+                            local val = gsr:GetAttribute(attr)
+                            if val ~= nil then
+                                extra_map_data[attr] = val
+                            end
+                        end
+                    end
+
+                    -- Extra attributes from the State folder itself
+                    if state_folder then
+                        local wanted_state = {
+                            "Creator",
+                            "Version",
+                            "Genre",
+                            "Layout",
+                        }
+                        for _, attr in ipairs(wanted_state) do
+                            local obj = state_folder:FindFirstChild(attr)
+                            if obj and obj.Value ~= nil then
+                                extra_map_data[attr] = obj.Value
                             end
                         end
                     end
                 end
 
+                -- Log summary to the UI
                 Recorder:Log("Mode: " .. current_mode)
-                Recorder:Log("Map: " .. current_map)
+                Recorder:Log("Map:  " .. current_map)
                 Recorder:Log("Towers: " .. tower1 .. ", " .. tower2)
                 Recorder:Log(tower3 .. ", " .. tower4 .. ", " .. tower5)
+
+                local mod_names = {}
+                for k in pairs(raw_mod_table) do table.insert(mod_names, k) end
+                if #mod_names > 0 then
+                    Recorder:Log("Mods: " .. table.concat(mod_names, ", "))
+                end
+                for k, v in pairs(extra_map_data) do
+                    Recorder:Log(k .. ": " .. tostring(v))
+                end
 
                 sync_existing_towers()
                 last_wave = 0
                 Globals.record_strat = true
 
+                -- ── Write the header file ─────────────────────────────────────────
+
                 if writefile then
-                    local game_info_str = ""
+                    -- Build a unified Config table for the loader.
+                    -- Add more fields here in the future – the loader receives
+                    -- everything from a single TDS:Init(Config) call.
+                    local cfg = {
+                        Map      = current_map,
+                        Mode     = current_mode,
+                        Loadout  = { tower1, tower2, tower3, tower4, tower5 },
+                        Modifiers = raw_mod_table,
+                    }
+
+                    -- Merge extra map attributes in (skip GameInfo fields for
+                    -- Trial / Special / DuckEvent modes if needed)
                     if not skip_game_info then
-                        game_info_str = string.format('\nTDS:GameInfo("%s", {%s})', current_map, current_modifiers)
+                        for k, v in pairs(extra_map_data) do
+                            cfg[k] = v
+                        end
                     end
-                    local config_header = string.format([[
-local TDS = loadstring(game:HttpGet("https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua"))()
 
-TDS:Loadout("%s", "%s", "%s", "%s", "%s")
-TDS:Mode("%s")%s
+                    local config_block = build_config_block(cfg)
 
-]], tower1, tower2, tower3, tower4, tower5, current_mode, game_info_str)
+                    local header = table.concat({
+                        'local TDS = loadstring(game:HttpGet("https://raw.githubusercontent.com/DuxiiT/auto-strat/refs/heads/main/Library.lua"))()',
+                        "",
+                        config_block,
+                        "TDS:Init(Config)",
+                        "",
+                        "",
+                    }, "\n")
 
-                    writefile("Strat.txt", config_header)
+                    writefile("Strat.txt", header)
                 end
 
                 Window:Notify({
@@ -866,7 +1004,6 @@ TDS:Mode("%s")%s
                 end
                 record_action(command)
                 Recorder:Log("Placed " .. tower_name .. " (Index: " .. my_index .. ")")
-
             end)
 
             towers_folder.ChildRemoved:Connect(function(tower)
@@ -876,7 +1013,6 @@ TDS:Mode("%s")%s
                 if my_index then
                     record_action(string.format('TDS:Sell(%d)', my_index))
                     Recorder:Log("Sold Tower " .. my_index)
-                    
                     spawned_towers[tower] = nil
                 end
             end)
